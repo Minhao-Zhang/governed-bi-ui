@@ -48,22 +48,40 @@ import type { GraphNode, GraphNodeKind, KnowledgeGraph } from "@/lib/types";
 
 /* ── Per-kind presentation ────────────────────────────────────────────────── */
 
+type Shape = "square" | "circle" | "rounded" | "diamond" | "hexagon" | "octagon";
+
 type KindMeta = {
   label: string;
   icon: LucideIcon;
-  /** Tailwind classes for the left accent border + legend dot (grouping only). */
-  accent: string;
-  dot: string;
+  /** Shape encodes the asset kind (accessible, colorblind-safe; Chen-ER
+   * convention: entity = rectangle, relationship = diamond). */
+  shape: Shape;
+  /** A COOL categorical fill for the kind — deliberately avoids green/amber/red,
+   * which stay reserved for the reliability channel (suspect / excluded). */
+  fill: string;
 };
 
 const KIND_META: Record<GraphNodeKind, KindMeta> = {
-  table: { label: "Table", icon: Table2, accent: "border-l-emerald-500", dot: "bg-emerald-500" },
-  join: { label: "Join", icon: Link2, accent: "border-l-amber-500", dot: "bg-amber-500" },
-  metric: { label: "Metric", icon: Gauge, accent: "border-l-blue-500", dot: "bg-blue-500" },
-  term: { label: "Term", icon: BookText, accent: "border-l-violet-500", dot: "bg-violet-500" },
-  rule: { label: "Rule", icon: Scale, accent: "border-l-rose-500", dot: "bg-rose-500" },
-  few_shot: { label: "Few-shot", icon: Lightbulb, accent: "border-l-sky-500", dot: "bg-sky-500" },
-  negative_example: { label: "Negative", icon: Ban, accent: "border-l-zinc-500", dot: "bg-zinc-500" },
+  table: { label: "Table", icon: Table2, shape: "square", fill: "bg-slate-600" },
+  join: { label: "Join", icon: Link2, shape: "diamond", fill: "bg-cyan-600" },
+  metric: { label: "Metric", icon: Gauge, shape: "circle", fill: "bg-violet-600" },
+  term: { label: "Term", icon: BookText, shape: "rounded", fill: "bg-indigo-600" },
+  rule: { label: "Rule", icon: Scale, shape: "hexagon", fill: "bg-blue-600" },
+  few_shot: { label: "Few-shot", icon: Lightbulb, shape: "rounded", fill: "bg-sky-600" },
+  negative_example: { label: "Negative", icon: Ban, shape: "octagon", fill: "bg-fuchsia-600" },
+};
+
+/** Non-rectangular shapes via clip-path (inline style — reliable, unlike JIT
+ * arbitrary utilities); the icon stays upright and centered inside. */
+const CLIP: Partial<Record<Shape, string>> = {
+  diamond: "polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)",
+  hexagon: "polygon(25% 6%, 75% 6%, 100% 50%, 75% 94%, 25% 94%, 0% 50%)",
+  octagon: "polygon(30% 0%, 70% 0%, 100% 30%, 100% 70%, 70% 100%, 30% 100%, 0% 70%, 0% 30%)",
+};
+const RADIUS: Partial<Record<Shape, string>> = {
+  square: "rounded-[3px]",
+  circle: "rounded-full",
+  rounded: "rounded-lg",
 };
 
 /** Column order (x position) — absolute so a kind keeps its column when toggled. */
@@ -80,16 +98,20 @@ const KIND_ORDER: GraphNodeKind[] = [
 const COL_SPACING = 220;
 const ROW_SPACING = 90;
 
-// Fixed node box. Declaring width/height + predefined handle bounds lets React
-// Flow anchor edges without waiting on DOM measurement (which can silently never
-// complete inside flex/tab containers, leaving edges unrendered).
-const NODE_W = 176;
-const NODE_H = 74;
+// Fixed node box: a shape glyph at the top, label + kind caption below. Declaring
+// width/height + predefined handle bounds lets React Flow anchor edges without
+// waiting on DOM measurement (which can silently never complete in flex/tab
+// containers, leaving edges unrendered).
+const GLYPH = 52;
+const GLYPH_TOP = 6;
+const GLYPH_CY = GLYPH_TOP + GLYPH / 2; // edges attach at the glyph's centre
+const NODE_W = 132;
+const NODE_H = 108;
 
-/** Edge anchor points, so `toHandleBounds` can resolve them measurement-free. */
+/** Edge anchor points (glyph centre height), resolved measurement-free. */
 const PREDEFINED_HANDLES: NodeHandle[] = [
-  { id: null, type: "target", position: Position.Left, x: 0, y: NODE_H / 2, width: 1, height: 1 },
-  { id: null, type: "source", position: Position.Right, x: NODE_W, y: NODE_H / 2, width: 1, height: 1 },
+  { id: null, type: "target", position: Position.Left, x: 0, y: GLYPH_CY, width: 1, height: 1 },
+  { id: null, type: "source", position: Position.Right, x: NODE_W, y: GLYPH_CY, width: 1, height: 1 },
 ];
 
 /** Low-confidence joins get the "refused" red so they read as a warning. */
@@ -112,46 +134,77 @@ type GraphNodeData = {
 
 type GraphFlowNode = Node<GraphNodeData, "graphNode">;
 
-/** A compact card node: kind accent + label, a warning dot when a table hides a
- * suspect column, and a dimmed dashed frame when the asset is excluded. */
-function GraphNodeCard({ data, selected }: NodeProps<GraphFlowNode>) {
-  const meta = KIND_META[data.kind];
+/** The shape glyph: a shaped, colored badge (shape+color+icon all encode the
+ * kind) with reliability overlays — an amber dot for a suspect column, a red dot
+ * + dimming when excluded. */
+function ShapeGlyph({
+  kind,
+  suspect,
+  excluded,
+  selected,
+}: {
+  kind: GraphNodeKind;
+  suspect: boolean;
+  excluded: boolean;
+  selected: boolean;
+}) {
+  const meta = KIND_META[kind];
   const Icon = meta.icon;
+  const clip = CLIP[meta.shape];
 
   return (
-    <div
-      className={cn(
-        // Neutral stripe: kind is conveyed by the icon; the tier palette is
-        // reserved for the reliability channel (suspect dot / excluded frame).
-        "relative w-44 cursor-pointer rounded-md border border-l-4 border-l-muted-foreground/25 bg-card px-3 py-2 text-left shadow-sm ring-1 ring-foreground/5 transition-shadow hover:shadow-md",
-        selected && "ring-2 ring-ring",
-        data.excluded && "border-dashed opacity-60",
-      )}
-    >
-      {/* Edges attach here; kept subtle since the graph is read-only. */}
-      <Handle type="target" position={Position.Left} className="h-1.5! w-1.5! border-0! bg-muted-foreground/40!" />
-      <Handle type="source" position={Position.Right} className="h-1.5! w-1.5! border-0! bg-muted-foreground/40!" />
-
-      {data.hasSuspect && (
+    <div className="relative" style={{ width: GLYPH, height: GLYPH }}>
+      {/* Selection halo (behind, unclipped — a ring on a clipped shape is cut off). */}
+      {selected && <div className="absolute -inset-1 rounded-xl ring-2 ring-ring" aria-hidden />}
+      <div
+        className={cn("flex size-full items-center justify-center text-white shadow-sm", meta.fill, RADIUS[meta.shape])}
+        style={clip ? { clipPath: clip } : undefined}
+      >
+        <Icon className="size-5" strokeWidth={2} aria-hidden />
+      </div>
+      {suspect && (
         <span
-          className="absolute -right-1 -top-1 size-2.5 rounded-full bg-tier-lineage ring-2 ring-card"
+          className="absolute -right-1 -top-1 size-3 rounded-full bg-tier-lineage ring-2 ring-card"
           title="Contains a suspect column"
           aria-hidden
         />
       )}
+      {excluded && (
+        <span
+          className="absolute -bottom-1 -right-1 size-3 rounded-full bg-tier-refused ring-2 ring-card"
+          title="Excluded from the served surface"
+          aria-hidden
+        />
+      )}
+    </div>
+  );
+}
 
-      <div className="flex items-center gap-1.5 text-[0.65rem] font-medium uppercase tracking-wide text-muted-foreground">
-        <Icon className="size-3" />
-        {meta.label}
-      </div>
-      <div className="truncate text-sm font-medium" title={data.label}>
+/** A typed node: shape/color/icon all encode the kind (redundant + accessible),
+ * with a clear label + kind caption below. */
+function GraphNodeCard({ data, selected }: NodeProps<GraphFlowNode>) {
+  const meta = KIND_META[data.kind];
+
+  return (
+    <div
+      className={cn("flex cursor-pointer flex-col items-center gap-1.5", data.excluded && "opacity-60")}
+      style={{ width: NODE_W }}
+    >
+      {/* Edges attach at the glyph centre. */}
+      <Handle type="target" position={Position.Left} className="opacity-0!" style={{ top: GLYPH_CY }} />
+      <Handle type="source" position={Position.Right} className="opacity-0!" style={{ top: GLYPH_CY }} />
+
+      <ShapeGlyph kind={data.kind} suspect={data.hasSuspect} excluded={data.excluded} selected={selected} />
+
+      <div
+        className="line-clamp-2 max-w-full text-center text-sm font-medium leading-tight break-words"
+        title={data.label}
+      >
         {data.label}
       </div>
-      {data.provenanceStatus && (
-        <div className="mt-0.5 truncate font-mono text-[0.65rem] text-muted-foreground" title={data.provenanceStatus}>
-          {data.provenanceStatus}
-        </div>
-      )}
+      <div className="text-[0.6rem] font-medium uppercase tracking-wide text-muted-foreground">
+        {meta.label}
+      </div>
     </div>
   );
 }
@@ -345,7 +398,7 @@ function KnowledgeGraphInner({
                 aria-pressed={active}
                 className={cn("gap-1.5 cursor-pointer", !active && "opacity-50")}
               >
-                <span className={cn("size-2 rounded-full", meta.dot)} aria-hidden />
+                <span className={cn("size-2 rounded-full", meta.fill)} aria-hidden />
                 {meta.label}
                 <span className="text-muted-foreground">{countByKind[kind] ?? 0}</span>
               </button>
