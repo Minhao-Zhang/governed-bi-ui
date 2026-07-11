@@ -133,6 +133,35 @@ export const knowledgeGraphSchema = z.object({
   edges: z.array(graphEdgeSchema),
 });
 
+/* ── /graph (ER: tables + joins, with FK cardinality + predicate) ─────────── */
+// Mirrors SchemaGraphNode/Edge (governed_bi.api.schemas). Unlike the knowledge
+// graph, ER edges carry the join equality (`on`) and `cardinality`, which powers
+// the column-level ER diagram (combined with per-column detail from /schema).
+
+export const erGraphNodeSchema = z.object({
+  id: z.string(),
+  physical_name: z.string(),
+  row_count: z.number().nullable(),
+  n_columns: z.number(),
+  excluded: z.boolean(),
+  has_suspect: z.boolean(),
+});
+
+export const erGraphEdgeSchema = z.object({
+  id: z.string(),
+  source: z.string(),
+  target: z.string(),
+  on: z.string(), // equality predicate, e.g. "table_b.a_id = table_a.id"
+  cardinality: z.string().nullable(), // e.g. "many_to_one"
+  confidence: z.number().nullable(),
+  low_confidence: z.boolean(),
+});
+
+export const erGraphSchema = z.object({
+  nodes: z.array(erGraphNodeSchema),
+  edges: z.array(erGraphEdgeSchema),
+});
+
 /* ── /corpus/assets, /skills ─────────────────────────────────────────────── */
 
 export const assetRowSchema = z.object({

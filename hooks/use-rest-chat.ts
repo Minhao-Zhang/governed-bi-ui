@@ -70,12 +70,19 @@ export function useRestChat(): ChatTransport {
       setMessages((prev) => [...prev, { id: nextId(), role: "user", text: trimmed }]);
       setIsRunning(true);
 
-      // 2) Indeterminate progress: cycle stages on a timer (POST has no events).
+      // 2) Indeterminate progress: POST /chat has no real stage events, so walk
+      // the stepper forward ONCE and HOLD on the last stage until the answer
+      // lands. (Never wrap — wrapping resets the checkmarks every cycle, which
+      // reads as the whole stepper blinking / jumping around.)
       setActiveStage(STAGE_IDS[0] ?? null);
       clearTimer();
       let index = 0;
       timerRef.current = window.setInterval(() => {
-        index = (index + 1) % STAGE_IDS.length;
+        if (index >= STAGE_IDS.length - 1) {
+          clearTimer(); // reached the last stage — hold there (spinner) until done
+          return;
+        }
+        index += 1;
         setActiveStage(STAGE_IDS[index]);
       }, STAGE_INTERVAL_MS);
 

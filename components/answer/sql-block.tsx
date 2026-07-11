@@ -1,13 +1,13 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { Check, Copy } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 
-/** Read-only SQL, monospace. The engine owns the write path; this only displays
- * the SQL the answer executed. */
+/** Read-only SQL, monospace + lightly syntax-highlighted. The engine owns the
+ * write path; this only displays the SQL the answer executed. */
 export function SqlBlock({ sql }: { sql: string }) {
   const [copied, setCopied] = useState(false);
 
@@ -32,8 +32,70 @@ export function SqlBlock({ sql }: { sql: string }) {
         </Button>
       </div>
       <pre className="overflow-x-auto p-3 text-xs leading-relaxed">
-        <code className="font-mono">{sql}</code>
+        <code className="font-mono">{highlightSql(sql)}</code>
       </pre>
     </div>
   );
+}
+
+/* ── Minimal SQL syntax highlighter ───────────────────────────────────────── */
+
+const KEYWORDS = new Set([
+  "SELECT", "FROM", "WHERE", "AND", "OR", "NOT", "AS", "ON", "JOIN", "INNER",
+  "LEFT", "RIGHT", "FULL", "OUTER", "CROSS", "GROUP", "BY", "ORDER", "HAVING",
+  "LIMIT", "OFFSET", "DISTINCT", "UNION", "ALL", "IN", "IS", "NULL", "LIKE",
+  "BETWEEN", "CASE", "WHEN", "THEN", "ELSE", "END", "ASC", "DESC", "WITH",
+  "INSERT", "INTO", "VALUES", "UPDATE", "SET", "DELETE", "EXISTS", "USING",
+  "OVER", "PARTITION", "TRUE", "FALSE",
+]);
+
+const FUNCTIONS = new Set([
+  "AVG", "COUNT", "SUM", "MIN", "MAX", "ROUND", "COALESCE", "CAST", "ABS",
+  "LOWER", "UPPER", "LENGTH", "NOW", "DATE", "SUBSTR", "SUBSTRING", "TRIM",
+  "CONCAT", "IFNULL", "NULLIF",
+]);
+
+// Order matters: comments and strings are matched before words so a keyword
+// inside a string/comment isn't recolored. Double-quoted tokens are SQL
+// identifiers (not strings). Longest safe matches win per position.
+const TOKEN =
+  /(--[^\n]*|\/\*[\s\S]*?\*\/)|('(?:[^']|'')*')|("(?:[^"]|"")*")|(\d+(?:\.\d+)?)|([A-Za-z_][A-Za-z0-9_]*)|([(),.;*=<>!+/-]+)/g;
+
+function highlightSql(sql: string): ReactNode[] {
+  const out: ReactNode[] = [];
+  let last = 0;
+  let key = 0;
+  const push = (text: string, cls?: string) => {
+    if (!text) return;
+    out.push(
+      cls ? (
+        <span key={key++} className={cls}>
+          {text}
+        </span>
+      ) : (
+        <span key={key++}>{text}</span>
+      ),
+    );
+  };
+
+  TOKEN.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = TOKEN.exec(sql)) !== null) {
+    if (m.index > last) push(sql.slice(last, m.index)); // whitespace / unmatched
+    const [full, comment, str, dquote, num, word, punct] = m;
+    if (comment) push(full, "text-muted-foreground italic");
+    else if (str) push(full, "text-emerald-600 dark:text-emerald-400");
+    else if (dquote) push(full, "text-foreground");
+    else if (num) push(full, "text-amber-600 dark:text-amber-400");
+    else if (word) {
+      const upper = word.toUpperCase();
+      if (KEYWORDS.has(upper)) push(full, "font-medium text-blue-600 dark:text-blue-400");
+      else if (FUNCTIONS.has(upper)) push(full, "text-violet-600 dark:text-violet-400");
+      else push(full);
+    } else if (punct) push(full, "text-muted-foreground");
+    else push(full);
+    last = m.index + full.length;
+  }
+  if (last < sql.length) push(sql.slice(last));
+  return out;
 }

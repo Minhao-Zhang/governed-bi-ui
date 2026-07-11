@@ -42,6 +42,8 @@ import {
 
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
+import { layoutGraph } from "@/lib/graph-layout";
+import { useFocusContext } from "@/components/schema/use-focus-context";
 import type { GraphNode, GraphNodeKind, KnowledgeGraph } from "@/lib/types";
 
 /* ── Per-kind presentation ────────────────────────────────────────────────── */
@@ -119,8 +121,9 @@ function GraphNodeCard({ data, selected }: NodeProps<GraphFlowNode>) {
   return (
     <div
       className={cn(
-        "relative w-44 rounded-md border border-l-4 bg-card px-3 py-2 text-left shadow-sm ring-1 ring-foreground/5 transition-shadow",
-        meta.accent,
+        // Neutral stripe: kind is conveyed by the icon; the tier palette is
+        // reserved for the reliability channel (suspect dot / excluded frame).
+        "relative w-44 rounded-md border border-l-4 border-l-muted-foreground/25 bg-card px-3 py-2 text-left shadow-sm ring-1 ring-foreground/5 transition-shadow",
         selected && "ring-2 ring-ring",
         data.excluded && "border-dashed opacity-60",
       )}
@@ -196,16 +199,12 @@ function layoutEdges(graph: KnowledgeGraph, visibleIds: Set<string>): Edge[] {
     .filter((e) => visibleIds.has(e.source) && visibleIds.has(e.target))
     .map((e) => {
       const low = e.low_confidence ?? false;
-      const label =
-        e.confidence !== null && e.confidence !== undefined
-          ? `conf ${e.confidence.toFixed(2)}`
-          : undefined;
       return {
         id: e.id,
         source: e.source,
         target: e.target,
-        label,
-        animated: low,
+        label: e.relation, // show the relation kind (join/measures/grounds/…)
+        animated: false, // static — calmer; low-confidence reads via red dashed
         markerEnd: {
           type: MarkerType.ArrowClosed,
           color: low ? LOW_CONFIDENCE_STROKE : EDGE_STROKE,
@@ -263,16 +262,28 @@ function KnowledgeGraphInner({
     () => new Set(presentKinds),
   );
 
-  // Re-seed the filter set if a different graph loads (e.g. mocks → live).
+  // Re-seed the filter set only when the SET of present kinds actually changes
+  // (keyed by content, not the graph object's identity — otherwise a refetch that
+  // returns the same kinds would wipe the user's filter selection).
   useEffect(() => {
     setVisibleKinds(new Set(presentKinds));
-  }, [presentKinds]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [presentKinds.join(",")]);
 
   const computed = useMemo(() => {
     const nodes = layoutNodes(graph, visibleKinds);
     const visibleIds = new Set(nodes.map((n) => n.id));
     const edges = layoutEdges(graph, visibleIds);
-    return { nodes, edges };
+    // Real layered layout (dagre): position encodes connectivity instead of the
+    // old per-kind grid, so related assets sit near the tables they attach to and
+    // dagre minimizes edge crossings.
+    const pos = layoutGraph(
+      nodes.map((n) => ({ id: n.id, width: NODE_W, height: NODE_H })),
+      edges.map((e) => ({ source: e.source, target: e.target })),
+      { direction: "LR", nodeSep: 44, rankSep: 120 },
+    );
+    const positioned = nodes.map((n) => ({ ...n, position: pos[n.id] ?? n.position }));
+    return { nodes: positioned, edges };
   }, [graph, visibleKinds]);
 
   // React Flow needs controlled state to reflect filter changes and allow drags.
@@ -296,6 +307,25 @@ function KnowledgeGraphInner({
   const handleNodeClick: NodeMouseHandler<GraphFlowNode> = (_event, node) => {
     onSelect(node.id);
   };
+
+  // Focus+context: hovering a node dims everything outside its 1-hop neighborhood.
+  const focus = useFocusContext(edges);
+  const shownNodes = useMemo(
+    () =>
+      nodes.map((n) => ({
+        ...n,
+        style: { ...n.style, opacity: focus.dimNode(n.id) ? 0.25 : 1, transition: "opacity 150ms" },
+      })),
+    [nodes, focus.dimNode],
+  );
+  const shownEdges = useMemo(
+    () =>
+      edges.map((e) => ({
+        ...e,
+        style: { ...e.style, opacity: focus.dimEdge(e.source, e.target) ? 0.12 : 1 },
+      })),
+    [edges, focus.dimEdge],
+  );
 
   return (
     <div className="space-y-3">
@@ -323,12 +353,14 @@ function KnowledgeGraphInner({
 
       <div className="h-[70vh] w-full rounded-md border bg-card">
         <ReactFlow<GraphFlowNode, Edge>
-          nodes={nodes}
-          edges={edges}
+          nodes={shownNodes}
+          edges={shownEdges}
           nodeTypes={NODE_TYPES}
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
           onNodeClick={handleNodeClick}
+          onNodeMouseEnter={(_e, n) => focus.focus(n.id)}
+          onNodeMouseLeave={() => focus.clear()}
           nodesConnectable={false}
           fitView
           minZoom={0.15}

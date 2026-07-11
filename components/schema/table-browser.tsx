@@ -28,6 +28,8 @@ function ColumnRow({ column }: { column: ColumnView }) {
       <TableCell className="font-mono text-xs">{column.physical_name}</TableCell>
       <TableCell className="font-mono text-xs text-muted-foreground">
         {column.logical_type || column.physical_type}
+        {!column.nullable && <span className="ml-1 text-[0.65rem]" title="not null">·NN</span>}
+        {column.is_unique && <span className="ml-1 text-[0.65rem]" title="unique">·U</span>}
       </TableCell>
       <TableCell className="text-xs">{column.role ?? "—"}</TableCell>
       <TableCell className="font-mono text-xs text-muted-foreground">
@@ -65,6 +67,7 @@ function ColumnRow({ column }: { column: ColumnView }) {
 function TableItem({ table }: { table: TableView }) {
   const [open, setOpen] = useState(false);
   const suspectCount = table.columns.filter((c) => c.reliability === "suspect").length;
+  const excludedCount = table.columns.filter((c) => c.excluded).length;
 
   return (
     <div className="rounded-md border">
@@ -93,6 +96,11 @@ function TableItem({ table }: { table: TableView }) {
           {suspectCount > 0 && (
             <Badge variant="outline" className="border-tier-lineage/50 text-tier-lineage">
               {suspectCount} suspect
+            </Badge>
+          )}
+          {excludedCount > 0 && (
+            <Badge variant="outline" className="border-tier-refused/40 text-tier-refused">
+              {excludedCount} excluded col
             </Badge>
           )}
           {table.excluded && (

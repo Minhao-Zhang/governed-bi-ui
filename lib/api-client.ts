@@ -17,6 +17,7 @@ import {
   MOCK_ANSWER,
   MOCK_ASSETS,
   MOCK_CAPABILITIES,
+  MOCK_ER_GRAPH,
   MOCK_GRAPH,
   MOCK_HEALTH,
   MOCK_REFUSAL,
@@ -29,6 +30,7 @@ import {
   capabilitiesSchema,
   corpusHealthSchema,
   editResponseSchema,
+  erGraphSchema,
   knowledgeGraphSchema,
   schemaListSchema,
   skillListSchema,
@@ -40,6 +42,7 @@ import type {
   ChatTurn,
   CorpusHealth,
   EditResponse,
+  ErGraph,
   KnowledgeGraph,
   SkillView,
   TableView,
@@ -103,10 +106,13 @@ export const api = {
 
   schema: (): Promise<TableView[]> => get("/schema", schemaListSchema, MOCK_SCHEMA),
 
-  /** The full knowledge graph over all asset types (GET /knowledge-graph). The
-   * ER tables+joins view is a separate GET /graph, not used by the current UI. */
+  /** The full knowledge graph over all asset types (GET /knowledge-graph). */
   knowledgeGraph: (): Promise<KnowledgeGraph> =>
     get("/knowledge-graph", knowledgeGraphSchema, MOCK_GRAPH),
+
+  /** The ER tables+joins graph (GET /graph): FK edges with cardinality + the
+   * join predicate. Combined with /schema columns to draw the ER diagram. */
+  erGraph: (): Promise<ErGraph> => get("/graph", erGraphSchema, MOCK_ER_GRAPH),
 
   assets: (type?: string): Promise<AssetRow[]> =>
     get(

@@ -13,6 +13,7 @@ import { PageShell } from "@/components/layout/page-shell";
 import { QueryState } from "@/components/common/query-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { ErDiagram } from "@/components/schema/er-diagram";
 import { KnowledgeGraph } from "@/components/schema/knowledge-graph";
 import { NodeDetailSheet } from "@/components/schema/node-detail-sheet";
 import { TableBrowser } from "@/components/schema/table-browser";
@@ -32,11 +33,16 @@ export default function SchemaPage() {
       title="Schema"
       description="Relationships and the semantic layer as a knowledge graph."
     >
-      <Tabs defaultValue="graph" className="gap-4">
+      <Tabs defaultValue="relationships" className="gap-4">
         <TabsList>
-          <TabsTrigger value="graph">Graph</TabsTrigger>
+          <TabsTrigger value="relationships">Relationships</TabsTrigger>
+          <TabsTrigger value="graph">Semantic graph</TabsTrigger>
           <TabsTrigger value="tables">Tables</TabsTrigger>
         </TabsList>
+
+        <TabsContent value="relationships">
+          <ErDiagram onSelect={setSelectedId} />
+        </TabsContent>
 
         <TabsContent value="graph">
           <QueryState

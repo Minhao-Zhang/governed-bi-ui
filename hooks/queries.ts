@@ -25,6 +25,10 @@ export function useGraph() {
   return useQuery({ queryKey: ["knowledge-graph"], queryFn: api.knowledgeGraph });
 }
 
+export function useErGraph() {
+  return useQuery({ queryKey: ["er-graph"], queryFn: api.erGraph });
+}
+
 export function useAssets(type?: string) {
   return useQuery({ queryKey: ["assets", type ?? "all"], queryFn: () => api.assets(type) });
 }

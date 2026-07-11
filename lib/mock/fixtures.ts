@@ -17,6 +17,7 @@ import type {
   AssetRow,
   Capabilities,
   CorpusHealth,
+  ErGraph,
   KnowledgeGraph,
   SkillView,
   TableView,
@@ -328,6 +329,23 @@ export const MOCK_GRAPH: KnowledgeGraph = {
     { id: "e9", source: "term_total", target: "metric_total", relation: "grounds", confidence: null },
     { id: "e10", source: "rule_flags", target: "table_b", relation: "scopes", confidence: null },
     { id: "e11", source: "fs_001", target: "term_total", relation: "exemplifies", confidence: null },
+  ],
+};
+
+/* ── /graph — ER (tables + joins, with FK cardinality + predicate) ───────── */
+// Consistent with MOCK_SCHEMA's real FK columns so column-anchored edges resolve.
+// table_d is an isolated dimension (no FK yet) — a realistic case.
+
+export const MOCK_ER_GRAPH: ErGraph = {
+  nodes: [
+    { id: "table_a", physical_name: "table_a", row_count: 1000, n_columns: 2, excluded: false, has_suspect: false },
+    { id: "table_b", physical_name: "table_b", row_count: 25000, n_columns: 4, excluded: false, has_suspect: true },
+    { id: "table_c", physical_name: "table_c", row_count: 8000, n_columns: 2, excluded: false, has_suspect: false },
+    { id: "table_d", physical_name: "table_d", row_count: 40, n_columns: 2, excluded: false, has_suspect: false },
+  ],
+  edges: [
+    { id: "er_b_a", source: "table_b", target: "table_a", on: "table_b.a_id = table_a.id", cardinality: "many_to_one", confidence: 0.92, low_confidence: false },
+    { id: "er_c_a", source: "table_c", target: "table_a", on: "table_c.a_id = table_a.id", cardinality: "many_to_one", confidence: 0.55, low_confidence: true },
   ],
 };
 

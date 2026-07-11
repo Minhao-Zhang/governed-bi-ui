@@ -12,6 +12,9 @@ import type {
   columnViewSchema,
   corpusHealthSchema,
   editResponseSchema,
+  erGraphEdgeSchema,
+  erGraphNodeSchema,
+  erGraphSchema,
   graphEdgeSchema,
   graphNodeKindSchema,
   graphNodeSchema,
@@ -33,6 +36,9 @@ export type GraphNodeKind = z.infer<typeof graphNodeKindSchema>;
 export type GraphNode = z.infer<typeof graphNodeSchema>;
 export type GraphEdge = z.infer<typeof graphEdgeSchema>;
 export type KnowledgeGraph = z.infer<typeof knowledgeGraphSchema>;
+export type ErGraphNode = z.infer<typeof erGraphNodeSchema>;
+export type ErGraphEdge = z.infer<typeof erGraphEdgeSchema>;
+export type ErGraph = z.infer<typeof erGraphSchema>;
 export type AssetRow = z.infer<typeof assetRowSchema>;
 export type SkillView = z.infer<typeof skillViewSchema>;
 export type ResultTable = z.infer<typeof resultTableSchema>;
