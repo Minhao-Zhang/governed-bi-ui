@@ -2,6 +2,7 @@
   "name": "governed-bi-ui",
   "version": "0.1.0",
   "private": true,
+  "description": "Web frontend for the governed-bi engine (https://github.com/Minhao-Zhang/governed-bi): chat, semantic-layer schema/graph, corpus, and audit views.",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
