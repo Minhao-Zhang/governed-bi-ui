@@ -83,14 +83,16 @@ function highlightSql(sql: string): ReactNode[] {
   while ((m = TOKEN.exec(sql)) !== null) {
     if (m.index > last) push(sql.slice(last, m.index)); // whitespace / unmatched
     const [full, comment, str, dquote, num, word, punct] = m;
+    // Code palette deliberately avoids the reliability hues (green/amber/red) so
+    // "color = trust" holds app-wide; shades are AA-safe on the muted code bg.
     if (comment) push(full, "text-muted-foreground italic");
-    else if (str) push(full, "text-emerald-600 dark:text-emerald-400");
+    else if (str) push(full, "text-cyan-700 dark:text-cyan-300");
     else if (dquote) push(full, "text-foreground");
-    else if (num) push(full, "text-amber-600 dark:text-amber-400");
+    else if (num) push(full); // numbers stay default — no tier-hue collision
     else if (word) {
       const upper = word.toUpperCase();
-      if (KEYWORDS.has(upper)) push(full, "font-medium text-blue-600 dark:text-blue-400");
-      else if (FUNCTIONS.has(upper)) push(full, "text-violet-600 dark:text-violet-400");
+      if (KEYWORDS.has(upper)) push(full, "font-medium text-blue-700 dark:text-blue-300");
+      else if (FUNCTIONS.has(upper)) push(full, "text-violet-700 dark:text-violet-300");
       else push(full);
     } else if (punct) push(full, "text-muted-foreground");
     else push(full);

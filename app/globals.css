@@ -90,15 +90,17 @@
   --sidebar-accent-foreground: oklch(0.205 0 0);
   --sidebar-border: oklch(0.922 0 0);
   --sidebar-ring: oklch(0.708 0 0);
-  /* Reliability tiers (light): green / amber / amber / red. */
-  --tier-governed: oklch(0.58 0.13 155);
-  --tier-governed-foreground: oklch(0.985 0 0);
-  --tier-lineage: oklch(0.7 0.14 75);
-  --tier-lineage-foreground: oklch(0.25 0.03 75);
-  --tier-fenced-raw: oklch(0.66 0.13 55);
-  --tier-fenced-raw-foreground: oklch(0.985 0 0);
-  --tier-refused: oklch(0.58 0.22 27);
-  --tier-refused-foreground: oklch(0.985 0 0);
+  /* Reliability tiers (light): green / amber / orange / red — darkened so tier
+   * TEXT clears WCAG AA (4.5:1) on white; hues kept separated. Foregrounds are
+   * light so each also works as a solid pill. */
+  --tier-governed: oklch(0.52 0.14 152);
+  --tier-governed-foreground: oklch(0.99 0 0);
+  --tier-lineage: oklch(0.55 0.13 68);
+  --tier-lineage-foreground: oklch(0.99 0 0);
+  --tier-fenced-raw: oklch(0.55 0.14 40);
+  --tier-fenced-raw-foreground: oklch(0.99 0 0);
+  --tier-refused: oklch(0.54 0.21 27);
+  --tier-refused-foreground: oklch(0.99 0 0);
 }
 
 .dark {
@@ -154,4 +156,14 @@
   html {
     @apply font-sans;
   }
+}
+
+/* Smooth the focus+context fade in the graph views. Opacity is set per-element:
+ * on the node, and on each edge's path + label text + label background — so a
+ * dimmed edge fades together with its cardinality/relation label. */
+.react-flow__node,
+.react-flow__edge-path,
+.react-flow__edge-text,
+.react-flow__edge-textbg {
+  transition: opacity 160ms ease;
 }

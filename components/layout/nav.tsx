@@ -1,8 +1,10 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Activity, Boxes, MessagesSquare, Network } from "lucide-react";
+import { useTheme } from "next-themes";
+import { Activity, Boxes, MessagesSquare, MoonStar, Network, Sun } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import { useCapabilities } from "@/hooks/queries";
@@ -24,8 +26,9 @@ export function Nav() {
 
   return (
     <aside className="flex h-full w-56 shrink-0 flex-col border-r bg-sidebar text-sidebar-foreground">
-      <div className="flex h-14 items-center gap-2 border-b px-4">
+      <div className="flex h-14 items-center justify-between gap-2 border-b px-4">
         <span className="font-mono text-sm font-semibold tracking-tight">governed-bi</span>
+        <ThemeToggle />
       </div>
 
       <nav className="flex-1 space-y-1 p-2">
@@ -48,6 +51,26 @@ export function Nav() {
 
       <CapabilitiesStrip />
     </aside>
+  );
+}
+
+function ThemeToggle() {
+  const { resolvedTheme, setTheme } = useTheme();
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+
+  const isDark = resolvedTheme === "dark";
+  return (
+    <button
+      type="button"
+      onClick={() => setTheme(isDark ? "light" : "dark")}
+      aria-label={isDark ? "Switch to light theme" : "Switch to dark theme"}
+      title={isDark ? "Light theme" : "Dark theme"}
+      className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+    >
+      {/* Render a stable icon until mounted to avoid a hydration mismatch. */}
+      {mounted && isDark ? <Sun className="size-4" /> : <MoonStar className="size-4" />}
+    </button>
   );
 }
 

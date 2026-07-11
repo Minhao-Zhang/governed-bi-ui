@@ -83,7 +83,7 @@ function ErTableCard({ data, selected }: NodeProps<ErFlowNode>) {
     <div
       style={{ width: CARD_W }}
       className={cn(
-        "relative overflow-hidden rounded-md border bg-card text-left shadow-sm ring-1 ring-foreground/5",
+        "relative cursor-pointer overflow-hidden rounded-md border bg-card text-left shadow-sm ring-1 ring-foreground/5 transition-shadow hover:shadow-md",
         selected && "ring-2 ring-ring",
         t.excluded && "border-dashed opacity-60",
       )}
@@ -129,9 +129,9 @@ function ErColumnRow({ col, y }: { col: ColumnView; y: number }) {
       <Handle id={`s-${col.physical_name}`} type="source" position={Position.Right} className="opacity-0!" style={{ top: y }} />
 
       {col.role === "primary_key" ? (
-        <KeyRound className="size-3 shrink-0 text-amber-500" aria-label="primary key" />
+        <KeyRound className="size-3 shrink-0 text-foreground" aria-label="primary key" />
       ) : col.role === "foreign_key" ? (
-        <Link2 className="size-3 shrink-0 text-blue-500" aria-label="foreign key" />
+        <Link2 className="size-3 shrink-0 text-muted-foreground" aria-label="foreign key" />
       ) : (
         <span className="size-3 shrink-0" />
       )}
@@ -258,21 +258,25 @@ function ErCanvas({
   const handleNodeClick: NodeMouseHandler<ErFlowNode> = (_e, node) => onSelect(node.id);
 
   // Focus+context: hovering a table dims everything outside its FK neighborhood.
+  // The edge path, its label <text>, and the label bg <rect> are separate elements,
+  // so dim all three (via style/labelStyle/labelBgStyle) — otherwise the "N:1"
+  // label stays bright while its edge fades.
   const focus = useFocusContext(edges);
   const shownNodes = useMemo(
-    () =>
-      nodes.map((n) => ({
-        ...n,
-        style: { ...n.style, opacity: focus.dimNode(n.id) ? 0.25 : 1, transition: "opacity 150ms" },
-      })),
+    () => nodes.map((n) => ({ ...n, style: { ...n.style, opacity: focus.dimNode(n.id) ? 0.25 : 1 } })),
     [nodes, focus.dimNode],
   );
   const shownEdges = useMemo(
     () =>
-      edges.map((e) => ({
-        ...e,
-        style: { ...e.style, opacity: focus.dimEdge(e.source, e.target) ? 0.12 : 1 },
-      })),
+      edges.map((e) => {
+        const o = focus.dimEdge(e.source, e.target) ? 0.12 : 1;
+        return {
+          ...e,
+          style: { ...e.style, opacity: o },
+          labelStyle: { ...(e.labelStyle ?? {}), opacity: o },
+          labelBgStyle: { ...(e.labelBgStyle ?? {}), opacity: o },
+        };
+      }),
     [edges, focus.dimEdge],
   );
 

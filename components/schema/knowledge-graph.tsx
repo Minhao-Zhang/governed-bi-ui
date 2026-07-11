@@ -123,7 +123,7 @@ function GraphNodeCard({ data, selected }: NodeProps<GraphFlowNode>) {
       className={cn(
         // Neutral stripe: kind is conveyed by the icon; the tier palette is
         // reserved for the reliability channel (suspect dot / excluded frame).
-        "relative w-44 rounded-md border border-l-4 border-l-muted-foreground/25 bg-card px-3 py-2 text-left shadow-sm ring-1 ring-foreground/5 transition-shadow",
+        "relative w-44 cursor-pointer rounded-md border border-l-4 border-l-muted-foreground/25 bg-card px-3 py-2 text-left shadow-sm ring-1 ring-foreground/5 transition-shadow hover:shadow-md",
         selected && "ring-2 ring-ring",
         data.excluded && "border-dashed opacity-60",
       )}
@@ -309,21 +309,24 @@ function KnowledgeGraphInner({
   };
 
   // Focus+context: hovering a node dims everything outside its 1-hop neighborhood.
+  // Dim the edge path + its relation label <text> + label bg <rect> together, so
+  // the relation label fades with its edge rather than staying bright.
   const focus = useFocusContext(edges);
   const shownNodes = useMemo(
-    () =>
-      nodes.map((n) => ({
-        ...n,
-        style: { ...n.style, opacity: focus.dimNode(n.id) ? 0.25 : 1, transition: "opacity 150ms" },
-      })),
+    () => nodes.map((n) => ({ ...n, style: { ...n.style, opacity: focus.dimNode(n.id) ? 0.25 : 1 } })),
     [nodes, focus.dimNode],
   );
   const shownEdges = useMemo(
     () =>
-      edges.map((e) => ({
-        ...e,
-        style: { ...e.style, opacity: focus.dimEdge(e.source, e.target) ? 0.12 : 1 },
-      })),
+      edges.map((e) => {
+        const o = focus.dimEdge(e.source, e.target) ? 0.12 : 1;
+        return {
+          ...e,
+          style: { ...e.style, opacity: o },
+          labelStyle: { ...(e.labelStyle ?? {}), opacity: o },
+          labelBgStyle: { ...(e.labelBgStyle ?? {}), opacity: o },
+        };
+      }),
     [edges, focus.dimEdge],
   );
 
