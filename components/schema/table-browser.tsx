@@ -1,16 +1,24 @@
 "use client";
 
 /**
- * Plain, auditable table browser: an expandable list of tables, each revealing a
- * columns table with governance flags. No accordion primitive ships in the UI
- * kit, so we roll a tiny controlled one with useState.
+ * Plain, auditable table browser: an expandable, virtualized list of tables,
+ * each revealing a columns table with governance flags. No accordion primitive
+ * ships in the UI kit, so we roll a tiny controlled one (a Set of open ids that
+ * survives virtualization recycling).
+ *
+ * D15: self-fetching + capability-gated. When the engine `can_scope`, rows come
+ * from the lean `/schema/summary` and a table's full columns are hydrated lazily
+ * on expand via `/schema/{id}`; otherwise it falls back to today's flat behavior
+ * — the full `/schema` dump with columns already embedded.
  */
 
-import { useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { ChevronRight } from "lucide-react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   Table,
   TableBody,
@@ -19,7 +27,74 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import type { ColumnView, TableView } from "@/lib/types";
+import { canScope } from "@/lib/capabilities";
+import {
+  useCapabilities,
+  useSchema,
+  useSchemaSummary,
+  useTableDetail,
+} from "@/hooks/queries";
+import type {
+  ColumnView,
+  SchemaScope,
+  TableSummary,
+  TableView,
+} from "@/lib/types";
+
+/** Normalized collapsed-row shape, projected from either a lean `TableSummary`
+ * (scoped) or a full `TableView` (fallback), so the row header renders the same
+ * from either source. `full` is only present in fallback mode (columns embedded). */
+interface BrowserRow {
+  id: string;
+  physical_name: string;
+  namespace: string;
+  row_count: number | null;
+  grain: string | null;
+  excluded: boolean;
+  excluded_reason: string | null;
+  provenance_status: string | null;
+  suspectCount: number;
+  excludedCount: number;
+  hasSuspect: boolean;
+  full?: TableView;
+}
+
+function summaryToRow(t: TableSummary): BrowserRow {
+  const suspectCount = t.columns.filter((c) => c.reliability === "suspect").length;
+  const excludedCount = t.columns.filter((c) => c.excluded).length;
+  return {
+    id: t.id,
+    physical_name: t.physical_name,
+    namespace: t.schema,
+    row_count: t.row_count,
+    grain: null,
+    excluded: t.excluded,
+    excluded_reason: null,
+    provenance_status: t.provenance_status,
+    suspectCount,
+    excludedCount,
+    hasSuspect: t.has_suspect,
+  };
+}
+
+function tableToRow(t: TableView): BrowserRow {
+  const suspectCount = t.columns.filter((c) => c.reliability === "suspect").length;
+  const excludedCount = t.columns.filter((c) => c.excluded).length;
+  return {
+    id: t.id,
+    physical_name: t.physical_name,
+    namespace: t.db,
+    row_count: t.row_count,
+    grain: t.grain,
+    excluded: t.excluded,
+    excluded_reason: t.excluded_reason,
+    provenance_status: t.provenance_status,
+    suspectCount,
+    excludedCount,
+    hasSuspect: suspectCount > 0,
+    full: t,
+  };
+}
 
 function ColumnRow({ column }: { column: ColumnView }) {
   const suspect = column.reliability === "suspect";
@@ -64,95 +139,239 @@ function ColumnRow({ column }: { column: ColumnView }) {
   );
 }
 
-function TableItem({ table }: { table: TableView }) {
-  const [open, setOpen] = useState(false);
-  const suspectCount = table.columns.filter((c) => c.reliability === "suspect").length;
-  const excludedCount = table.columns.filter((c) => c.excluded).length;
-
+/** The columns table shown on expand, rendered from a fully-hydrated TableView
+ * (columns present in both scoped `/schema/{id}` and fallback `/schema`). */
+function ColumnsTable({ table }: { table: TableView }) {
   return (
-    <div className="rounded-md border">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        aria-expanded={open}
-        className="flex w-full items-center gap-3 px-3 py-2.5 text-left transition-colors hover:bg-muted/50"
-      >
-        <ChevronRight
-          className={cn("size-4 shrink-0 text-muted-foreground transition-transform", open && "rotate-90")}
-          aria-hidden
-        />
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <span className="truncate font-mono text-sm font-medium">{table.physical_name}</span>
-            <span className="text-xs text-muted-foreground">{table.db}</span>
-          </div>
-          <div className="mt-0.5 truncate text-xs text-muted-foreground">
-            {table.row_count !== null && <span>{table.row_count.toLocaleString()} rows</span>}
-            {table.row_count !== null && table.grain && <span> · </span>}
-            {table.grain && <span>grain: {table.grain}</span>}
-          </div>
-        </div>
-        <div className="flex shrink-0 flex-wrap items-center justify-end gap-1">
-          {suspectCount > 0 && (
-            <Badge variant="outline" className="border-tier-lineage/50 text-tier-lineage">
-              {suspectCount} suspect
-            </Badge>
-          )}
-          {excludedCount > 0 && (
-            <Badge variant="outline" className="border-tier-refused/40 text-tier-refused">
-              {excludedCount} excluded col
-            </Badge>
-          )}
-          {table.excluded && (
-            <Badge
-              variant="outline"
-              className="border-tier-refused/40 text-tier-refused"
-              title={table.excluded_reason ?? undefined}
-            >
-              excluded
-            </Badge>
-          )}
-          {table.provenance_status && (
-            <Badge variant="outline" className="text-muted-foreground">
-              {table.provenance_status}
-            </Badge>
-          )}
-        </div>
-      </button>
-
-      {open && (
-        <div className="border-t">
-          {table.description && (
-            <p className="px-3 py-2 text-xs text-muted-foreground">{table.description}</p>
-          )}
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Column</TableHead>
-                <TableHead>Type</TableHead>
-                <TableHead>Role</TableHead>
-                <TableHead>References</TableHead>
-                <TableHead>Governance</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {table.columns.map((col) => (
-                <ColumnRow key={col.physical_name} column={col} />
-              ))}
-            </TableBody>
-          </Table>
-        </div>
+    <div className="border-t">
+      {table.description && (
+        <p className="px-3 py-2 text-xs text-muted-foreground">{table.description}</p>
       )}
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead>Column</TableHead>
+            <TableHead>Type</TableHead>
+            <TableHead>Role</TableHead>
+            <TableHead>References</TableHead>
+            <TableHead>Governance</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {table.columns.map((col) => (
+            <ColumnRow key={col.physical_name} column={col} />
+          ))}
+        </TableBody>
+      </Table>
     </div>
   );
 }
 
-export function TableBrowser({ tables }: { tables: TableView[] }) {
+/** Scoped mode: hydrate a table's full columns lazily when the row opens. */
+function LazyColumns({ id }: { id: string }) {
+  const { data, isLoading, isError } = useTableDetail(id);
+
+  if (isLoading) {
+    return (
+      <div className="space-y-2 border-t px-3 py-3">
+        <Skeleton className="h-4 w-1/3" />
+        <Skeleton className="h-4 w-full" />
+        <Skeleton className="h-4 w-full" />
+        <Skeleton className="h-4 w-2/3" />
+      </div>
+    );
+  }
+  if (isError || !data) {
+    return (
+      <div className="border-t px-3 py-2 text-xs text-muted-foreground">
+        Couldn&apos;t load columns for this table.
+      </div>
+    );
+  }
+  return <ColumnsTable table={data} />;
+}
+
+/** Collapsed-row header + expand affordance. The name opens the detail sheet
+ * (onSelect); the chevron and the metadata line toggle the inline expand. */
+function RowHeader({
+  row,
+  open,
+  onToggle,
+  onSelect,
+}: {
+  row: BrowserRow;
+  open: boolean;
+  onToggle: () => void;
+  onSelect?: (id: string) => void;
+}) {
+  const hasMeta = row.row_count !== null || !!row.grain;
   return (
-    <div className="space-y-2">
-      {tables.map((table) => (
-        <TableItem key={table.id} table={table} />
-      ))}
+    <div className="flex w-full items-center gap-2 px-3 py-2.5">
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={open}
+        aria-label={open ? "Collapse table" : "Expand table"}
+        className="shrink-0 rounded p-0.5 text-muted-foreground transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+      >
+        <ChevronRight
+          className={cn("size-4 transition-transform", open && "rotate-90")}
+          aria-hidden
+        />
+      </button>
+
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => onSelect?.(row.id)}
+            title="Open details"
+            className="truncate rounded text-left font-mono text-sm font-medium hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          >
+            {row.physical_name}
+          </button>
+          <span className="shrink-0 text-xs text-muted-foreground">{row.namespace}</span>
+        </div>
+        <button
+          type="button"
+          onClick={onToggle}
+          className="mt-0.5 block max-w-full truncate text-left text-xs text-muted-foreground transition-colors hover:text-foreground"
+        >
+          {hasMeta ? (
+            <>
+              {row.row_count !== null && <span>{row.row_count.toLocaleString()} rows</span>}
+              {row.row_count !== null && row.grain && <span> · </span>}
+              {row.grain && <span>grain: {row.grain}</span>}
+            </>
+          ) : (
+            <span>{open ? "hide columns" : "show columns"}</span>
+          )}
+        </button>
+      </div>
+
+      <div className="flex shrink-0 flex-wrap items-center justify-end gap-1">
+        {(row.suspectCount > 0 || row.hasSuspect) && (
+          <Badge variant="outline" className="border-tier-lineage/50 text-tier-lineage">
+            {row.suspectCount > 0 ? `${row.suspectCount} suspect` : "suspect"}
+          </Badge>
+        )}
+        {row.excludedCount > 0 && (
+          <Badge variant="outline" className="border-tier-refused/40 text-tier-refused">
+            {row.excludedCount} excluded col
+          </Badge>
+        )}
+        {row.excluded && (
+          <Badge
+            variant="outline"
+            className="border-tier-refused/40 text-tier-refused"
+            title={row.excluded_reason ?? undefined}
+          >
+            excluded
+          </Badge>
+        )}
+        {row.provenance_status && (
+          <Badge variant="outline" className="text-muted-foreground">
+            {row.provenance_status}
+          </Badge>
+        )}
+      </div>
+    </div>
+  );
+}
+
+export function TableBrowser({
+  scope,
+  onSelect,
+}: {
+  scope?: SchemaScope;
+  onSelect?: (id: string) => void;
+}) {
+  const { data: caps } = useCapabilities();
+  const scoped = canScope(caps);
+
+  // Scoped: lean summary rows (columns hydrated lazily on expand).
+  // Fallback: full flat dump (columns embedded, rendered directly).
+  const summary = useSchemaSummary(scope, { enabled: scoped });
+  const full = useSchema({ enabled: !scoped });
+
+  const rows = useMemo<BrowserRow[]>(() => {
+    if (scoped) return (summary.data?.items ?? []).map(summaryToRow);
+    return (full.data ?? []).map(tableToRow);
+  }, [scoped, summary.data, full.data]);
+
+  const isLoading = scoped ? summary.isLoading : full.isLoading;
+
+  // Open rows tracked by id (survives virtualization recycling).
+  const [openIds, setOpenIds] = useState<Set<string>>(() => new Set());
+  const toggle = (id: string) =>
+    setOpenIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const rowVirtualizer = useVirtualizer({
+    count: rows.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => 58,
+    overscan: 6,
+  });
+
+  if (isLoading && rows.length === 0) {
+    return (
+      <div className="space-y-2">
+        {Array.from({ length: 6 }).map((_, i) => (
+          <Skeleton key={i} className="h-[52px] w-full rounded-md" />
+        ))}
+      </div>
+    );
+  }
+
+  if (rows.length === 0) {
+    return (
+      <div className="rounded-md border px-3 py-8 text-center text-sm text-muted-foreground">
+        No tables yet.
+      </div>
+    );
+  }
+
+  return (
+    <div ref={scrollRef} className="max-h-[70vh] overflow-auto">
+      <div
+        className="relative w-full"
+        style={{ height: `${rowVirtualizer.getTotalSize()}px` }}
+      >
+        {rowVirtualizer.getVirtualItems().map((virtualRow) => {
+          const row = rows[virtualRow.index];
+          const open = openIds.has(row.id);
+          return (
+            <div
+              key={row.id}
+              data-index={virtualRow.index}
+              ref={rowVirtualizer.measureElement}
+              className="absolute left-0 top-0 w-full pb-2"
+              style={{ transform: `translateY(${virtualRow.start}px)` }}
+            >
+              <div className="rounded-md border">
+                <RowHeader
+                  row={row}
+                  open={open}
+                  onToggle={() => toggle(row.id)}
+                  onSelect={onSelect}
+                />
+                {open &&
+                  (scoped ? (
+                    <LazyColumns id={row.id} />
+                  ) : row.full ? (
+                    <ColumnsTable table={row.full} />
+                  ) : null)}
+              </div>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }

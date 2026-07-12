@@ -38,6 +38,10 @@ export const capabilitiesSchema = z.object({
   can_stream: z.boolean(), // LangGraph Server present → useStream, else /chat fallback
   has_live_model: z.boolean(),
   model: z.string().nullable(), // null in the offline profile (no model wired)
+  // D15 scope-on-demand flags. Optional + default false so a pre-D15 engine that
+  // omits them still parses and the UI falls back to today's flat behavior.
+  can_scope: z.boolean().optional().default(false), // scopeable/paginated routes + focus/radius graphs
+  can_search: z.boolean().optional().default(false), // server GET /search (else client Fuse index)
 });
 
 /* ── /health ─────────────────────────────────────────────────────────────── */
@@ -79,7 +83,7 @@ export const columnViewSchema = z.object({
 export const tableViewSchema = z.object({
   id: z.string(),
   physical_name: z.string(),
-  db: z.string(),
+  db: z.string(), // namespace; D15 renames this wire field to `schema` in lockstep
   row_count: z.number().nullable(),
   description: z.string().nullable(),
   grain: z.string().nullable(),
@@ -88,6 +92,37 @@ export const tableViewSchema = z.object({
   excluded_reason: z.string().nullable(),
   provenance_status: z.string().nullable(),
   columns: z.array(columnViewSchema),
+});
+
+/* ── /schema/summary — lean, scopeable catalog (D15, gated on can_scope) ──── */
+// Lean projection for the virtualized browser + client search index: drops the
+// heavy per-column fields (sample_values/evidence/description). This is a
+// D15-only route, so its namespace field is already the renamed `schema` (a
+// pre-D15 engine never serves it, so there is no legacy `db` to carry here).
+
+export const leanColumnSchema = z.object({
+  physical_name: z.string(),
+  physical_type: z.string(),
+  role: z.string().nullable().optional(),
+  reliability: z.string().default("ok"),
+  excluded: z.boolean().default(false),
+});
+
+export const tableSummarySchema = z.object({
+  id: z.string(),
+  physical_name: z.string(),
+  schema: z.string(),
+  row_count: z.number().nullable(),
+  n_columns: z.number(),
+  excluded: z.boolean(),
+  has_suspect: z.boolean(),
+  provenance_status: z.string().nullable(),
+  columns: z.array(leanColumnSchema).default([]),
+});
+
+export const schemaSummaryResponseSchema = z.object({
+  total: z.number(),
+  items: z.array(tableSummarySchema),
 });
 
 /* ── /graph (full knowledge graph over all asset types) ──────────────────── */
@@ -115,6 +150,9 @@ export const graphNodeSchema = z.object({
   provenance_status: z.string().nullable(),
   confidence: z.number().nullable().optional(),
   has_suspect: z.boolean().optional(),
+  // D15: the schema namespace this node belongs to. Additive + nullable so a
+  // pre-D15 response (which omits it) still validates; drives schema grouping.
+  schema: z.string().nullable().optional(),
 });
 
 export const graphEdgeSchema = z.object({
@@ -128,9 +166,47 @@ export const graphEdgeSchema = z.object({
   low_confidence: z.boolean().optional(),
 });
 
+/* ── Scope-on-demand envelope (D15): boundary + meta for scoped graphs ────── */
+
+/** A curated cross-schema join whose other endpoint is outside the current
+ * scope. D15 Q7: cross-schema joins execute, so this renders as a NAVIGABLE
+ * boundary stub (click to re-scope onto the other endpoint), never a warning. */
+export const boundaryEdgeSchema = z.object({
+  id: z.string(),
+  in_scope_table: z.string(),
+  other_schema: z.string(),
+  other_table_id: z.string(),
+  other_label: z.string(),
+  on: z.string(), // equality predicate
+  cardinality: z.string().nullable().optional(),
+  confidence: z.number().nullable().optional(),
+  low_confidence: z.boolean().optional().default(false),
+});
+
+export const graphScopeSchema = z.object({
+  schema: z.string().nullable().optional(),
+  focus: z.string().nullable().optional(),
+  radius: z.number().nullable().optional(),
+  node_budget: z.number().nullable().optional(),
+});
+
+/** Envelope metadata for a scoped/bounded graph. `truncated` + returned/total
+ * counts drive the "N more — expand" affordance; truncation is deterministic
+ * server-side (BFS from focus, edge-confidence desc, then id asc — D15 Q8). */
+export const graphMetaSchema = z.object({
+  total_nodes: z.number(),
+  returned_nodes: z.number(),
+  total_edges: z.number(),
+  truncated: z.boolean().optional().default(false),
+  scope: graphScopeSchema.optional(),
+});
+
+// `boundary` + `meta` are optional so a pre-D15 bare {nodes,edges} still parses.
 export const knowledgeGraphSchema = z.object({
   nodes: z.array(graphNodeSchema),
   edges: z.array(graphEdgeSchema),
+  boundary: z.array(boundaryEdgeSchema).optional(),
+  meta: graphMetaSchema.optional(),
 });
 
 /* ── /graph (ER: tables + joins, with FK cardinality + predicate) ─────────── */
@@ -145,6 +221,8 @@ export const erGraphNodeSchema = z.object({
   n_columns: z.number(),
   excluded: z.boolean(),
   has_suspect: z.boolean(),
+  // D15: schema namespace (additive + nullable; pre-D15 responses omit it).
+  schema: z.string().nullable().optional(),
 });
 
 export const erGraphEdgeSchema = z.object({
@@ -160,6 +238,8 @@ export const erGraphEdgeSchema = z.object({
 export const erGraphSchema = z.object({
   nodes: z.array(erGraphNodeSchema),
   edges: z.array(erGraphEdgeSchema),
+  boundary: z.array(boundaryEdgeSchema).optional(),
+  meta: graphMetaSchema.optional(),
 });
 
 /* ── /corpus/assets, /skills ─────────────────────────────────────────────── */
@@ -197,6 +277,27 @@ export const answerViewSchema = z.object({
   escalation: z.string().nullable(),
   provenance: z.record(z.string(), z.unknown()),
   result: resultTableSchema.nullable(),
+});
+
+/* ── /search — server-ranked search (D15, DEFERRED; gated on can_search) ──── */
+// Q6: server FTS stays deferred; the default is a client Fuse index over the
+// summary catalog. This shape is the parse target only when can_search is true.
+export const searchHitSchema = z.object({
+  kind: z.string(), // "table" | "column" | asset kind
+  id: z.string(),
+  table_id: z.string().nullable().optional(),
+  label: z.string(),
+  schema: z.string().nullable(),
+  detail: z.string().nullable().optional(),
+  excluded: z.boolean().optional().default(false),
+  has_suspect: z.boolean().optional().default(false),
+  score: z.number().optional(),
+});
+
+export const searchResponseSchema = z.object({
+  query: z.string(),
+  total: z.number(),
+  hits: z.array(searchHitSchema),
 });
 
 export const schemaListSchema = z.array(tableViewSchema);

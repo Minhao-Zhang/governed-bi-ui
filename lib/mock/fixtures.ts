@@ -19,11 +19,18 @@ import type {
   CorpusHealth,
   ErGraph,
   KnowledgeGraph,
+  SchemaSummaryResponse,
   SkillView,
   TableView,
 } from "@/lib/types";
 
-const DB = "sample_db";
+// Two namespaces so the schema rail and cross-schema boundary are exercised
+// offline. The FK columns already cross these (table_c/table_d in `billing`
+// reference table_a/table_b in `sales`), so joins across them are the D15
+// navigable cross-schema case. The wire field is still `db` (renamed to
+// `schema` in lockstep with the engine); mock catalog/graph nodes use `schema`.
+const SALES = "sales";
+const BILLING = "billing";
 
 /* ── /capabilities — offline, no live model (mock mode) ──────────────────── */
 
@@ -35,6 +42,10 @@ export const MOCK_CAPABILITIES: Capabilities = {
   can_stream: false, // no LangGraph Server attached in mock mode
   has_live_model: false,
   model: "offline (no model attached)",
+  // Mock exercises the D15 scoped flow end-to-end; server /search stays deferred
+  // (client Fuse index is the default), so can_search is false.
+  can_scope: true,
+  can_search: false,
 };
 
 /* ── /health ─────────────────────────────────────────────────────────────── */
@@ -63,7 +74,7 @@ export const MOCK_SCHEMA: TableView[] = [
   {
     id: "table_a",
     physical_name: "table_a",
-    db: DB,
+    db: SALES,
     row_count: 1000,
     description: "Placeholder root table (one row per entity).",
     grain: "one row per entity",
@@ -113,7 +124,7 @@ export const MOCK_SCHEMA: TableView[] = [
   {
     id: "table_b",
     physical_name: "table_b",
-    db: DB,
+    db: SALES,
     row_count: 25000,
     description: "Placeholder fact table (one row per event).",
     grain: "one row per event",
@@ -199,7 +210,7 @@ export const MOCK_SCHEMA: TableView[] = [
   {
     id: "table_c",
     physical_name: "table_c",
-    db: DB,
+    db: BILLING,
     row_count: 8000,
     description: "Placeholder secondary fact table.",
     grain: "one row per record",
@@ -249,7 +260,7 @@ export const MOCK_SCHEMA: TableView[] = [
   {
     id: "table_d",
     physical_name: "table_d",
-    db: DB,
+    db: BILLING,
     row_count: 40,
     description: "Placeholder dimension table.",
     grain: "one row per category",
@@ -298,14 +309,40 @@ export const MOCK_SCHEMA: TableView[] = [
   },
 ];
 
+/* ── /schema/summary — lean catalog derived from MOCK_SCHEMA (D15) ───────── */
+// Kept in sync with MOCK_SCHEMA by derivation so the two never drift; the api
+// client filters/paginates this in mock mode. Namespace field is `schema`
+// (the D15-renamed name; this route is D15-only).
+
+export const MOCK_SCHEMA_SUMMARY: SchemaSummaryResponse = {
+  total: MOCK_SCHEMA.length,
+  items: MOCK_SCHEMA.map((t) => ({
+    id: t.id,
+    physical_name: t.physical_name,
+    schema: t.db,
+    row_count: t.row_count,
+    n_columns: t.columns.length,
+    excluded: t.excluded,
+    has_suspect: t.columns.some((c) => c.reliability === "suspect"),
+    provenance_status: t.provenance_status,
+    columns: t.columns.map((c) => ({
+      physical_name: c.physical_name,
+      physical_type: c.physical_type,
+      role: c.role ?? null,
+      reliability: c.reliability,
+      excluded: c.excluded,
+    })),
+  })),
+};
+
 /* ── /graph — full knowledge graph over all asset types ──────────────────── */
 
 export const MOCK_GRAPH: KnowledgeGraph = {
   nodes: [
-    { id: "table_a", kind: "table", label: "table_a", excluded: false, provenance_status: "certified", has_suspect: false },
-    { id: "table_b", kind: "table", label: "table_b", excluded: false, provenance_status: "certified", has_suspect: true },
-    { id: "table_c", kind: "table", label: "table_c", excluded: false, provenance_status: "heuristic", has_suspect: false },
-    { id: "table_d", kind: "table", label: "table_d", excluded: false, provenance_status: "certified", has_suspect: false },
+    { id: "table_a", kind: "table", label: "table_a", excluded: false, provenance_status: "certified", has_suspect: false, schema: SALES },
+    { id: "table_b", kind: "table", label: "table_b", excluded: false, provenance_status: "certified", has_suspect: true, schema: SALES },
+    { id: "table_c", kind: "table", label: "table_c", excluded: false, provenance_status: "heuristic", has_suspect: false, schema: BILLING },
+    { id: "table_d", kind: "table", label: "table_d", excluded: false, provenance_status: "certified", has_suspect: false, schema: BILLING },
     { id: "metric_total", kind: "metric", label: "metric_total", excluded: false, provenance_status: "certified", confidence: 0.95 },
     { id: "metric_average", kind: "metric", label: "metric_average", excluded: false, provenance_status: "certified", confidence: 0.9 },
     { id: "term_total", kind: "term", label: "total", excluded: false, provenance_status: "certified" },
@@ -338,14 +375,17 @@ export const MOCK_GRAPH: KnowledgeGraph = {
 
 export const MOCK_ER_GRAPH: ErGraph = {
   nodes: [
-    { id: "table_a", physical_name: "table_a", row_count: 1000, n_columns: 2, excluded: false, has_suspect: false },
-    { id: "table_b", physical_name: "table_b", row_count: 25000, n_columns: 4, excluded: false, has_suspect: true },
-    { id: "table_c", physical_name: "table_c", row_count: 8000, n_columns: 2, excluded: false, has_suspect: false },
-    { id: "table_d", physical_name: "table_d", row_count: 40, n_columns: 2, excluded: false, has_suspect: false },
+    { id: "table_a", physical_name: "table_a", row_count: 1000, n_columns: 2, excluded: false, has_suspect: false, schema: SALES },
+    { id: "table_b", physical_name: "table_b", row_count: 25000, n_columns: 4, excluded: false, has_suspect: true, schema: SALES },
+    { id: "table_c", physical_name: "table_c", row_count: 8000, n_columns: 2, excluded: false, has_suspect: false, schema: BILLING },
+    { id: "table_d", physical_name: "table_d", row_count: 40, n_columns: 2, excluded: false, has_suspect: false, schema: BILLING },
   ],
   edges: [
     { id: "er_b_a", source: "table_b", target: "table_a", on: "table_b.a_id = table_a.id", cardinality: "many_to_one", confidence: 0.92, low_confidence: false },
-    { id: "er_c_a", source: "table_c", target: "table_a", on: "table_c.a_id = table_a.id", cardinality: "many_to_one", confidence: 0.55, low_confidence: true },
+    // table_c (billing) → table_a (sales): a curated, executable cross-schema join (D15).
+    { id: "er_c_a", source: "table_c", target: "table_a", on: "table_c.a_id = table_a.id", cardinality: "many_to_one", confidence: 0.85, low_confidence: false },
+    // table_d (billing) → table_b (sales): a low-confidence cross-schema join.
+    { id: "er_d_b", source: "table_d", target: "table_b", on: "table_d.b_id = table_b.id", cardinality: "many_to_one", confidence: 0.55, low_confidence: true },
   ],
 };
 
@@ -370,7 +410,7 @@ export const MOCK_SKILLS: SkillView[] = [
   {
     skill_id: "routing",
     kind: "routing",
-    db: DB,
+    db: SALES,
     body: [
       "# Routing skill",
       "",

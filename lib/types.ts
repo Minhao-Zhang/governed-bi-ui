@@ -8,6 +8,7 @@ import type { z } from "zod";
 import type {
   answerViewSchema,
   assetRowSchema,
+  boundaryEdgeSchema,
   capabilitiesSchema,
   columnViewSchema,
   corpusHealthSchema,
@@ -16,13 +17,19 @@ import type {
   erGraphNodeSchema,
   erGraphSchema,
   graphEdgeSchema,
+  graphMetaSchema,
   graphNodeKindSchema,
   graphNodeSchema,
   knowledgeGraphSchema,
+  leanColumnSchema,
   reliabilityTierSchema,
   resultTableSchema,
+  schemaSummaryResponseSchema,
+  searchHitSchema,
+  searchResponseSchema,
   semanticAssuranceSchema,
   skillViewSchema,
+  tableSummarySchema,
   tableViewSchema,
 } from "./schemas";
 
@@ -44,6 +51,57 @@ export type SkillView = z.infer<typeof skillViewSchema>;
 export type ResultTable = z.infer<typeof resultTableSchema>;
 export type AnswerView = z.infer<typeof answerViewSchema>;
 export type EditResponse = z.infer<typeof editResponseSchema>;
+
+/* ── D15 scope-on-demand (gated on capabilities.can_scope / can_search) ───── */
+export type LeanColumn = z.infer<typeof leanColumnSchema>;
+export type TableSummary = z.infer<typeof tableSummarySchema>;
+export type SchemaSummaryResponse = z.infer<typeof schemaSummaryResponseSchema>;
+export type BoundaryEdge = z.infer<typeof boundaryEdgeSchema>;
+export type GraphMeta = z.infer<typeof graphMetaSchema>;
+export type SearchHit = z.infer<typeof searchHitSchema>;
+export type SearchResponse = z.infer<typeof searchResponseSchema>;
+
+/**
+ * Normalized catalog row for the search omnibox + schema rail. Produced
+ * client-side from either the full `/schema` dump (`namespace` ← `db`, fallback
+ * mode) or the lean `/schema/summary` (`namespace` ← `schema`, scoped mode), so
+ * the rail/search are source-agnostic and survive the eventual db→schema rename.
+ */
+export interface CatalogItem {
+  id: string;
+  physical_name: string;
+  namespace: string;
+  row_count: number | null;
+  n_columns: number;
+  excluded: boolean;
+  has_suspect: boolean;
+  provenance_status: string | null;
+}
+
+/**
+ * The scope the Schema tab drives its views by. Empty `{}` = whole corpus
+ * (today's flat behavior / fallback). `schema` narrows to one namespace;
+ * `focus`+`radius`+`nodeBudget` bound a graph to a table's neighborhood.
+ */
+export interface SchemaScope {
+  schema?: string;
+  focus?: string;
+  radius?: number;
+  nodeBudget?: number;
+  kinds?: string[]; // knowledge-graph node-kind filter
+}
+
+/**
+ * A node selected in either graph, lifted to the page and passed to the detail
+ * sheet. `node` carries the full knowledge-graph node when available (for the
+ * non-table generic detail); ER selections omit it (always a table → lazy detail).
+ */
+export interface GraphSelection {
+  id: string;
+  kind: string;
+  label: string;
+  node?: GraphNode;
+}
 
 /** One prior turn sent to the non-streaming POST /chat (TurnIn). */
 export interface ChatTurn {

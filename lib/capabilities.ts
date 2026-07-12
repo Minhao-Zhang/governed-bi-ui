@@ -20,3 +20,17 @@ export function canStream(caps: Capabilities | undefined): boolean {
 export function hasLiveModel(caps: Capabilities | undefined): boolean {
   return caps?.has_live_model === true;
 }
+
+/**
+ * D15: the backend can serve scopeable/paginated routes (`/schema/summary`,
+ * `/schema/{id}`) and focus/radius-bounded graphs. `=== true` returns false when
+ * the flag is absent (pre-D15 engine), which drives the fall-back-to-flat path.
+ */
+export function canScope(caps: Capabilities | undefined): boolean {
+  return caps?.can_scope === true;
+}
+
+/** D15: server-ranked `GET /search` is available (else the client Fuse index). */
+export function canSearch(caps: Capabilities | undefined): boolean {
+  return caps?.can_search === true;
+}

@@ -32,11 +32,30 @@ export interface LayoutOptions {
 
 export type Positions = Record<string, { x: number; y: number }>;
 
+/**
+ * Memoize by a stable content signature (node ids + dims + edge pairs + opts),
+ * so an identical graph — a react-query refetch that returns the same data, or a
+ * filter keystroke that doesn't change the visible node set — skips the
+ * synchronous dagre run entirely instead of relaying out on every render.
+ */
+const layoutCache = new Map<string, Positions>();
+const MAX_CACHE = 32;
+
+function signature(nodes: LayoutNode[], edges: LayoutEdge[], opts: LayoutOptions): string {
+  const n = nodes.map((x) => `${x.id}:${x.width}x${x.height}`).join(",");
+  const e = edges.map((x) => `${x.source}>${x.target}`).join(",");
+  return `${opts.direction ?? "LR"}|${opts.nodeSep ?? 56}|${opts.rankSep ?? 120}|${n}|${e}`;
+}
+
 export function layoutGraph(
   nodes: LayoutNode[],
   edges: LayoutEdge[],
   opts: LayoutOptions = {},
 ): Positions {
+  const key = signature(nodes, edges, opts);
+  const cached = layoutCache.get(key);
+  if (cached) return cached;
+
   const g = new dagre.graphlib.Graph();
   g.setGraph({
     rankdir: opts.direction ?? "LR",
@@ -65,5 +84,12 @@ export function layoutGraph(
       ? { x: laid.x - n.width / 2, y: laid.y - n.height / 2 }
       : { x: 0, y: 0 };
   }
+
+  // Bounded FIFO cache — evict the oldest entry once full.
+  if (layoutCache.size >= MAX_CACHE) {
+    const oldest = layoutCache.keys().next().value;
+    if (oldest !== undefined) layoutCache.delete(oldest);
+  }
+  layoutCache.set(key, positions);
   return positions;
 }

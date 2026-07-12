@@ -2,9 +2,10 @@
 
 /**
  * Right-hand detail panel for a selected graph node. Fully controlled by the
- * parent (open + onOpenChange). For a table node we resolve the matching
- * TableView and render its columns with governance flags; for every other kind
- * we show the node's label / kind / provenance / confidence.
+ * parent (open + onOpenChange). For a table selection we resolve the full
+ * TableView LAZILY (via useTableDetail) and render its columns with governance
+ * flags; for every other kind we show the node's label / kind / provenance /
+ * confidence carried on the selection itself.
  */
 
 import type { ReactNode } from "react";
@@ -12,6 +13,7 @@ import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   Sheet,
   SheetContent,
@@ -27,13 +29,8 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import type { ColumnView, GraphNode, KnowledgeGraph, TableView } from "@/lib/types";
-
-/** Match a graph node to its full TableView. KG nodes are lean (no physical
- * name), so the id is the join key; the label is a last-resort fallback. */
-function findTable(node: GraphNode, schema: TableView[]): TableView | undefined {
-  return schema.find((t) => t.id === node.id || t.physical_name === node.label);
-}
+import { useTableDetail } from "@/hooks/queries";
+import type { ColumnView, GraphNode, GraphSelection, TableView } from "@/lib/types";
 
 function KindBadge({ kind }: { kind: string }) {
   return (
@@ -191,48 +188,89 @@ function GenericDetail({ node }: { node: GraphNode }) {
   );
 }
 
+/** Minimal detail for a non-table selection whose full node payload is absent. */
+function MinimalDetail({ selection }: { selection: GraphSelection }) {
+  return (
+    <div className="space-y-4 px-4 pb-8">
+      <Separator />
+      <dl className="grid gap-2">
+        <Field
+          label="id"
+          value={<span className="font-mono text-xs">{selection.id}</span>}
+        />
+        <Field label="kind" value={selection.kind} />
+        <Field label="label" value={selection.label} />
+      </dl>
+    </div>
+  );
+}
+
+/** Loading placeholder for the lazily-resolved columns area of a table. */
+function TableDetailSkeleton() {
+  return (
+    <div className="space-y-4 px-4 pb-8">
+      <div className="flex flex-wrap items-center gap-2">
+        <Skeleton className="h-5 w-24" />
+      </div>
+      <div className="grid gap-2">
+        <Skeleton className="h-6 w-full" />
+        <Skeleton className="h-6 w-full" />
+      </div>
+      <div>
+        <Skeleton className="mb-1 h-4 w-24" />
+        <Skeleton className="h-40 w-full" />
+      </div>
+    </div>
+  );
+}
+
 export function NodeDetailSheet({
-  nodeId,
-  schema,
-  graph,
+  selection,
   open,
   onOpenChange,
 }: {
-  nodeId: string | null;
-  schema: TableView[];
-  graph: KnowledgeGraph;
+  selection: GraphSelection | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
-  const node = nodeId ? graph.nodes.find((n) => n.id === nodeId) ?? null : null;
-  const table = node && node.kind === "table" ? findTable(node, schema) : undefined;
+  const isTable = selection?.kind === "table";
+  // Call unconditionally to obey the rules of hooks; null disables the query.
+  const { data: table, isLoading: tableLoading } = useTableDetail(
+    isTable ? selection.id : null,
+  );
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent className="w-full overflow-y-auto sm:max-w-xl">
-        {node ? (
+        {selection ? (
           <>
             <SheetHeader>
               <SheetTitle className="flex items-center gap-2">
-                <span className="truncate">{node.label}</span>
-                <KindBadge kind={node.kind} />
+                <span className="truncate">{selection.label}</span>
+                <KindBadge kind={selection.kind} />
               </SheetTitle>
               <SheetDescription>
-                {node.kind === "table"
+                {isTable
                   ? "Table columns and their governance flags."
                   : "Semantic-layer asset detail."}
               </SheetDescription>
             </SheetHeader>
 
-            {node.kind === "table" && table ? (
-              <TableDetail table={table} />
-            ) : node.kind === "table" ? (
-              // Table node without a resolvable TableView — fall back gracefully.
-              <div className="px-4 pb-8 text-sm text-muted-foreground">
-                No column detail is available for this table.
-              </div>
+            {isTable ? (
+              tableLoading ? (
+                <TableDetailSkeleton />
+              ) : table ? (
+                <TableDetail table={table} />
+              ) : (
+                // Query errored or returned nothing — fall back gracefully.
+                <div className="px-4 pb-8 text-sm text-muted-foreground">
+                  No column detail is available for this table.
+                </div>
+              )
+            ) : selection.node ? (
+              <GenericDetail node={selection.node} />
             ) : (
-              <GenericDetail node={node} />
+              <MinimalDetail selection={selection} />
             )}
           </>
         ) : (

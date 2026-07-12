@@ -10,18 +10,20 @@
  * joins); the per-kind accent is purely for grouping.
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ReactFlow,
   ReactFlowProvider,
   Background,
   Controls,
   MiniMap,
+  Panel,
   Handle,
   Position,
   MarkerType,
   useNodesState,
   useEdgesState,
+  useReactFlow,
   type Node,
   type NodeHandle,
   type Edge,
@@ -30,11 +32,13 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import {
+  ArrowUpRight,
   Ban,
   BookText,
   Gauge,
   Lightbulb,
   Link2,
+  Maximize2,
   Scale,
   Search,
   Table2,
@@ -44,9 +48,18 @@ import {
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
+import { Skeleton } from "@/components/ui/skeleton";
 import { layoutGraph } from "@/lib/graph-layout";
 import { useFocusContext } from "@/components/schema/use-focus-context";
-import type { GraphNode, GraphNodeKind, KnowledgeGraph } from "@/lib/types";
+import { useKnowledgeGraph } from "@/hooks/queries";
+import type {
+  BoundaryEdge,
+  GraphNode,
+  GraphNodeKind,
+  GraphSelection,
+  KnowledgeGraph,
+  SchemaScope,
+} from "@/lib/types";
 
 /* ── Per-kind presentation ────────────────────────────────────────────────── */
 
@@ -129,6 +142,25 @@ const LOW_CONFIDENCE_STROKE = "#c0392b";
 /** Neutral stroke for ordinary edges (a concrete color so the arrow marker is
  * visible — React Flow renders an invisible marker when the color is undefined). */
 const EDGE_STROKE = "#94a3b8";
+/** Cross-schema (D15) join edges: a distinct COOL teal so they read as a
+ * navigable structural affordance, never a warning — red stays reserved for the
+ * reliability channel (low-confidence). */
+const CROSS_SCHEMA_STROKE = "#0d9488";
+
+/** Default node budget for the semantic graph (bounds a scoped/truncated fetch). */
+const DEFAULT_NODE_BUDGET = 150;
+
+/** Cool, reliability-safe accents for per-schema grouping (no green/amber/red). */
+const SCHEMA_ACCENTS = ["#0891b2", "#7c3aed", "#4f46e5", "#2563eb", "#0284c7", "#0d9488", "#4338ca"];
+
+/** Deterministic schema→accent map (namespaces sorted so colors are stable). */
+function buildSchemaColors(schemas: string[]): Record<string, string> {
+  const map: Record<string, string> = {};
+  [...schemas].sort().forEach((s, i) => {
+    map[s] = SCHEMA_ACCENTS[i % SCHEMA_ACCENTS.length];
+  });
+  return map;
+}
 
 /* ── Custom node ──────────────────────────────────────────────────────────── */
 
@@ -140,6 +172,9 @@ type GraphNodeData = {
   hasSuspect: boolean;
   excluded: boolean;
   provenanceStatus: string | null;
+  /** D15 namespace + its soft accent (only set when the graph spans >1 schema). */
+  schema: string | null;
+  schemaColor: string | null;
 };
 
 type GraphFlowNode = Node<GraphNodeData, "graphNode">;
@@ -212,9 +247,23 @@ function GraphNodeCard({ data, selected }: NodeProps<GraphFlowNode>) {
       >
         {data.label}
       </div>
-      <div className="text-[0.6rem] font-medium uppercase tracking-wide text-muted-foreground">
+      <div className="flex items-center gap-1 text-[0.6rem] font-medium uppercase tracking-wide text-muted-foreground">
         {meta.label}
       </div>
+      {/* Soft per-schema grouping accent (only when the graph spans >1 schema). */}
+      {data.schemaColor && data.schema && (
+        <span
+          className="inline-flex items-center gap-1 rounded-full px-1.5 py-px text-[0.55rem] font-medium"
+          style={{
+            color: data.schemaColor,
+            backgroundColor: `${data.schemaColor}1a`,
+          }}
+          title={`Schema: ${data.schema}`}
+        >
+          <span className="size-1.5 rounded-full" style={{ backgroundColor: data.schemaColor }} aria-hidden />
+          {data.schema}
+        </span>
+      )}
     </div>
   );
 }
@@ -224,7 +273,13 @@ const NODE_TYPES = { graphNode: GraphNodeCard };
 
 /* ── Layout ───────────────────────────────────────────────────────────────── */
 
-function toFlowNode(node: GraphNode, x: number, y: number): GraphFlowNode {
+function toFlowNode(
+  node: GraphNode,
+  x: number,
+  y: number,
+  schemaColors: Record<string, string>,
+): GraphFlowNode {
+  const schema = node.schema ?? null;
   return {
     id: node.id,
     type: "graphNode",
@@ -238,13 +293,19 @@ function toFlowNode(node: GraphNode, x: number, y: number): GraphFlowNode {
       hasSuspect: node.has_suspect ?? false,
       excluded: node.excluded ?? false,
       provenanceStatus: node.provenance_status ?? null,
+      schema,
+      schemaColor: schema ? (schemaColors[schema] ?? null) : null,
     },
   };
 }
 
 /** Build flow nodes for the nodes passing `include` (initial grid positions are
  * overwritten by dagre in `computed`). */
-function layoutNodes(graph: KnowledgeGraph, include: (n: GraphNode) => boolean): GraphFlowNode[] {
+function layoutNodes(
+  graph: KnowledgeGraph,
+  include: (n: GraphNode) => boolean,
+  schemaColors: Record<string, string>,
+): GraphFlowNode[] {
   const rowInColumn: Partial<Record<GraphNodeKind, number>> = {};
   return graph.nodes
     .filter(include)
@@ -253,16 +314,31 @@ function layoutNodes(graph: KnowledgeGraph, include: (n: GraphNode) => boolean):
       const col = colIndex === -1 ? KIND_ORDER.length : colIndex;
       const row = rowInColumn[n.kind] ?? 0;
       rowInColumn[n.kind] = row + 1;
-      return toFlowNode(n, col * COL_SPACING, row * ROW_SPACING);
+      return toFlowNode(n, col * COL_SPACING, row * ROW_SPACING, schemaColors);
     });
 }
 
-/** Keep only edges whose endpoints are both visible; flag low-confidence joins. */
-function layoutEdges(graph: KnowledgeGraph, visibleIds: Set<string>): Edge[] {
+/** Keep only edges whose endpoints are both visible; flag low-confidence joins
+ * (red) and cross-schema joins (teal, navigable — never a warning). */
+function layoutEdges(
+  graph: KnowledgeGraph,
+  visibleIds: Set<string>,
+  schemaById: Map<string, string | null>,
+): Edge[] {
   return graph.edges
     .filter((e) => visibleIds.has(e.source) && visibleIds.has(e.target))
     .map((e) => {
       const low = e.low_confidence ?? false;
+      const sourceSchema = schemaById.get(e.source) ?? null;
+      const targetSchema = schemaById.get(e.target) ?? null;
+      // Cross-schema only reads as such once low-confidence (reliability) is ruled out.
+      const crossSchema =
+        !low && sourceSchema !== null && targetSchema !== null && sourceSchema !== targetSchema;
+      const stroke = low
+        ? LOW_CONFIDENCE_STROKE
+        : crossSchema
+          ? CROSS_SCHEMA_STROKE
+          : EDGE_STROKE;
       return {
         id: e.id,
         source: e.source,
@@ -271,12 +347,14 @@ function layoutEdges(graph: KnowledgeGraph, visibleIds: Set<string>): Edge[] {
         animated: false, // static — calmer; low-confidence reads via red dashed
         markerEnd: {
           type: MarkerType.ArrowClosed,
-          color: low ? LOW_CONFIDENCE_STROKE : EDGE_STROKE,
+          color: stroke,
         },
         style: {
-          stroke: low ? LOW_CONFIDENCE_STROKE : EDGE_STROKE,
+          stroke,
           strokeWidth: low ? 2 : 1.5,
-          strokeDasharray: low ? "6 4" : undefined,
+          // Low-confidence: long red dash (warning). Cross-schema: short teal dash
+          // (a distinct, navigable structural cue that is NOT the warning dash).
+          strokeDasharray: low ? "6 4" : crossSchema ? "3 3" : undefined,
         },
         labelStyle: { fontSize: 10 },
         // `relation` is an open-vocab string; carried for reference only (no visual role).
@@ -287,12 +365,17 @@ function layoutEdges(graph: KnowledgeGraph, visibleIds: Set<string>): Edge[] {
 
 /* ── Component ────────────────────────────────────────────────────────────── */
 
-export function KnowledgeGraph(props: {
-  graph: KnowledgeGraph;
-  onSelect: (nodeId: string) => void;
-}) {
-  // The inner component uses React Flow hooks (useUpdateNodeInternals), which
-  // require a provider in scope.
+const EMPTY_GRAPH: KnowledgeGraph = { nodes: [], edges: [] };
+
+type GraphViewProps = {
+  scope?: SchemaScope;
+  onScopeChange?: (next: SchemaScope) => void;
+  onSelect: (selection: GraphSelection) => void;
+};
+
+export function KnowledgeGraph(props: GraphViewProps) {
+  // The inner component uses React Flow hooks (useReactFlow / useUpdateNodeInternals),
+  // which require a provider in scope.
   return (
     <ReactFlowProvider>
       <KnowledgeGraphInner {...props} />
@@ -300,14 +383,13 @@ export function KnowledgeGraph(props: {
   );
 }
 
-function KnowledgeGraphInner({
-  graph,
-  onSelect,
-}: {
-  graph: KnowledgeGraph;
-  /** Called with the clicked node id so a parent can open its detail sheet. */
-  onSelect: (nodeId: string) => void;
-}) {
+function KnowledgeGraphInner({ scope, onScopeChange, onSelect }: GraphViewProps) {
+  // Self-fetch: when can_scope is false the hook returns the full graph and the
+  // scope is a no-op, so we pass it through without branching.
+  const { data, isLoading, isError } = useKnowledgeGraph(scope);
+  const graph = data ?? EMPTY_GRAPH;
+  const rf = useReactFlow();
+
   // Which kinds actually appear, in canonical column order — drives the filters.
   const presentKinds = useMemo(() => {
     const set = new Set(graph.nodes.map((n) => n.kind));
@@ -320,6 +402,17 @@ function KnowledgeGraphInner({
     return counts;
   }, [graph]);
 
+  // Per-schema accents (only when the graph actually spans >1 namespace, else the
+  // tint is noise). Cross-schema edges are keyed off the same node→schema map.
+  const schemaColors = useMemo(() => {
+    const schemas = [...new Set(graph.nodes.map((n) => n.schema).filter((s): s is string => !!s))];
+    return schemas.length > 1 ? buildSchemaColors(schemas) : {};
+  }, [graph]);
+  const schemaById = useMemo(
+    () => new Map(graph.nodes.map((n) => [n.id, n.schema ?? null] as const)),
+    [graph],
+  );
+
   // Visible kinds; start with the default-visible set (joins hidden). New Set on
   // each toggle so the memo below recomputes.
   const [visibleKinds, setVisibleKinds] = useState<Set<GraphNodeKind>>(() =>
@@ -331,22 +424,27 @@ function KnowledgeGraphInner({
 
   // Re-seed the filter set only when the SET of present kinds actually changes
   // (keyed by content, not the graph object's identity — otherwise a refetch that
-  // returns the same kinds would wipe the user's filter selection).
-  useEffect(() => {
+  // returns the same kinds would wipe the user's filter selection). Handled during
+  // render via the "adjust state when a prop changes" pattern rather than an effect,
+  // so the corrected set applies before paint (no extra commit) and without tripping
+  // react-hooks/set-state-in-effect.
+  const presentSig = presentKinds.join(",");
+  const [prevPresentSig, setPrevPresentSig] = useState(presentSig);
+  if (presentSig !== prevPresentSig) {
+    setPrevPresentSig(presentSig);
     setVisibleKinds(defaultVisible(presentKinds));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [presentKinds.join(",")]);
+  }
 
+  // Layout depends ONLY on the VISIBLE NODE SET (kinds + excluded), never on the
+  // name query — so typing dims/undims nodes without triggering a dagre relayout.
+  // layoutGraph() also self-memoizes by content signature as a second guard.
   const computed = useMemo(() => {
-    const q = query.trim().toLowerCase();
     const include = (n: GraphNode) =>
-      visibleKinds.has(n.kind) &&
-      (!hideExcluded || !(n.excluded ?? false)) &&
-      (q === "" || n.label.toLowerCase().includes(q));
+      visibleKinds.has(n.kind) && (!hideExcluded || !(n.excluded ?? false));
 
-    const nodes = layoutNodes(graph, include);
+    const nodes = layoutNodes(graph, include, schemaColors);
     const visibleIds = new Set(nodes.map((n) => n.id));
-    const edges = layoutEdges(graph, visibleIds);
+    const edges = layoutEdges(graph, visibleIds, schemaById);
     // Real layered layout (dagre): position encodes connectivity instead of the
     // old per-kind grid, so related assets sit near the tables they attach to and
     // dagre minimizes edge crossings.
@@ -357,7 +455,7 @@ function KnowledgeGraphInner({
     );
     const positioned = nodes.map((n) => ({ ...n, position: pos[n.id] ?? n.position }));
     return { nodes: positioned, edges, shown: positioned.length, total: graph.nodes.length };
-  }, [graph, visibleKinds, query, hideExcluded]);
+  }, [graph, visibleKinds, hideExcluded, schemaColors, schemaById]);
 
   // React Flow needs controlled state to reflect filter changes and allow drags.
   const [nodes, setNodes, onNodesChange] = useNodesState<GraphFlowNode>(computed.nodes);
@@ -367,6 +465,17 @@ function KnowledgeGraphInner({
     setNodes(computed.nodes);
     setEdges(computed.edges);
   }, [computed, setNodes, setEdges]);
+
+  // Name filter as dimming (not relayout): the set of ids whose label matches.
+  const q = query.trim().toLowerCase();
+  const queryActive = q !== "";
+  const matchIds = useMemo(() => {
+    if (!queryActive) return null;
+    return new Set(
+      computed.nodes.filter((n) => n.data.label.toLowerCase().includes(q)).map((n) => n.id),
+    );
+  }, [computed.nodes, q, queryActive]);
+  const matchCount = matchIds ? matchIds.size : computed.shown;
 
   const toggleKind = (kind: GraphNodeKind) => {
     setVisibleKinds((prev) => {
@@ -383,22 +492,77 @@ function KnowledgeGraphInner({
     setVisibleKinds(defaultVisible(presentKinds));
   };
 
+  // Map back to the source graph node so the detail sheet gets the full record
+  // (confidence, provenance, schema…) for the generic non-table detail.
+  const nodeById = useMemo(() => new Map(graph.nodes.map((n) => [n.id, n])), [graph]);
   const handleNodeClick: NodeMouseHandler<GraphFlowNode> = (_event, node) => {
-    onSelect(node.id);
+    const src = nodeById.get(node.id);
+    onSelect({
+      id: node.id,
+      kind: node.data.kind,
+      label: node.data.label,
+      node: src,
+    });
+  };
+
+  const onFit = useCallback(() => rf.fitView({ maxZoom: 1, duration: 300 }), [rf]);
+
+  // Jump-to-focus: when the scope names a focus node, center on it once it lands
+  // in the current layout (fires once per focus change, so panning isn't undone).
+  const centeredFocusRef = useRef<string | null>(null);
+  useEffect(() => {
+    const focusId = scope?.focus ?? null;
+    if (!focusId) {
+      centeredFocusRef.current = null;
+      return;
+    }
+    if (centeredFocusRef.current === focusId) return;
+    const target = computed.nodes.find((n) => n.id === focusId);
+    if (target) {
+      rf.setCenter(target.position.x + NODE_W / 2, target.position.y + GLYPH_CY, {
+        zoom: 1,
+        duration: 400,
+      });
+      centeredFocusRef.current = focusId;
+    }
+  }, [scope?.focus, computed.nodes, rf]);
+
+  // Gated (safe no-op when the engine omits them): "expand budget" banner + the
+  // navigable cross-schema boundary stub panel.
+  const graphMeta = graph.meta;
+  const truncated = graphMeta?.truncated ?? false;
+  const boundary = graph.boundary ?? [];
+  const nodeBudget = scope?.nodeBudget ?? DEFAULT_NODE_BUDGET;
+
+  const expandBudget = () => {
+    onScopeChange?.({ ...(scope ?? {}), nodeBudget: nodeBudget + DEFAULT_NODE_BUDGET });
+  };
+  const navigateBoundary = (b: BoundaryEdge) => {
+    onScopeChange?.({
+      schema: b.other_schema,
+      focus: b.other_table_id,
+      radius: scope?.radius ?? 1,
+      nodeBudget,
+    });
   };
 
   // Focus+context: hovering a node dims everything outside its 1-hop neighborhood.
   // Dim the edge path + its relation label <text> + label bg <rect> together, so
   // the relation label fades with its edge rather than staying bright.
   const focus = useFocusContext(edges);
+  const { dimNode, dimEdge } = focus;
   const shownNodes = useMemo(
-    () => nodes.map((n) => ({ ...n, style: { ...n.style, opacity: focus.dimNode(n.id) ? 0.25 : 1 } })),
-    [nodes, focus.dimNode],
+    () =>
+      nodes.map((n) => {
+        const dim = dimNode(n.id) || (matchIds !== null && !matchIds.has(n.id));
+        return { ...n, style: { ...n.style, opacity: dim ? 0.25 : 1 } };
+      }),
+    [nodes, dimNode, matchIds],
   );
   const shownEdges = useMemo(
     () =>
       edges.map((e) => {
-        const o = focus.dimEdge(e.source, e.target) ? 0.12 : 1;
+        const o = dimEdge(e.source, e.target) ? 0.12 : 1;
         return {
           ...e,
           style: { ...e.style, opacity: o },
@@ -406,12 +570,15 @@ function KnowledgeGraphInner({
           labelBgStyle: { ...(e.labelBgStyle ?? {}), opacity: o },
         };
       }),
-    [edges, focus.dimEdge],
+    [edges, dimEdge],
   );
+
+  const showSkeleton = isLoading && !data;
+  const showError = isError && !data;
 
   return (
     <div className="space-y-2">
-      {/* Name filter + governance toggle + reset + count. */}
+      {/* Name filter + governance toggle + fit + reset + count. */}
       <div className="flex flex-wrap items-center gap-2">
         <div className="relative">
           <Search
@@ -438,6 +605,14 @@ function KnowledgeGraphInner({
         </Badge>
         <button
           type="button"
+          onClick={onFit}
+          className="inline-flex items-center gap-1 text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+        >
+          <Maximize2 className="size-3" aria-hidden />
+          Fit
+        </button>
+        <button
+          type="button"
           onClick={reset}
           className="text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
         >
@@ -445,6 +620,7 @@ function KnowledgeGraphInner({
         </button>
         <span className="ml-auto text-xs text-muted-foreground">
           {computed.shown} of {computed.total} shown
+          {queryActive && ` · ${matchCount} match`}
         </span>
       </div>
 
@@ -470,8 +646,31 @@ function KnowledgeGraphInner({
         })}
       </div>
 
-      <div className="h-[70vh] w-full rounded-md border bg-card">
-        {computed.shown === 0 ? (
+      {/* Gated: truncated-graph "expand budget" banner (no-op when meta absent). */}
+      {truncated && onScopeChange && (
+        <div className="flex items-center gap-2 rounded-md border bg-muted/40 px-3 py-1.5 text-xs">
+          <span className="text-muted-foreground">
+            Showing {graphMeta?.returned_nodes ?? computed.shown} of{" "}
+            {graphMeta?.total_nodes ?? computed.total} nodes in scope.
+          </span>
+          <button
+            type="button"
+            onClick={expandBudget}
+            className="font-medium text-foreground underline underline-offset-2 hover:no-underline"
+          >
+            Expand
+          </button>
+        </div>
+      )}
+
+      <div className="relative h-[70vh] w-full rounded-md border bg-card">
+        {showSkeleton ? (
+          <Skeleton className="h-full w-full" />
+        ) : showError ? (
+          <div className="flex h-full items-center justify-center text-center text-sm text-muted-foreground">
+            Couldn’t load the knowledge graph.
+          </div>
+        ) : computed.shown === 0 ? (
           <div className="flex h-full flex-col items-center justify-center gap-2 text-center text-sm text-muted-foreground">
             <span>No assets match the current filters.</span>
             <button
@@ -493,13 +692,43 @@ function KnowledgeGraphInner({
             onNodeMouseEnter={(_e, n) => focus.focus(n.id)}
             onNodeMouseLeave={() => focus.clear()}
             nodesConnectable={false}
-            fitView
-            minZoom={0.15}
+            onlyRenderVisibleElements
+            defaultViewport={{ x: 24, y: 24, zoom: 0.75 }}
+            minZoom={0.3}
+            maxZoom={2}
             proOptions={{ hideAttribution: true }}
           >
             <Background />
             <Controls showInteractive={false} />
             <MiniMap pannable zoomable className="bg-muted!" />
+            {/* Gated: navigable cross-schema boundary stubs (never a warning — D15 Q7). */}
+            {boundary.length > 0 && onScopeChange && (
+              <Panel position="top-right">
+                <div className="w-56 rounded-md border bg-card/95 p-2 shadow-sm backdrop-blur">
+                  <div className="mb-1 text-[0.65rem] font-medium uppercase tracking-wide text-muted-foreground">
+                    Cross-schema joins
+                  </div>
+                  <ul className="space-y-1">
+                    {boundary.map((b) => (
+                      <li key={b.id}>
+                        <button
+                          type="button"
+                          onClick={() => navigateBoundary(b)}
+                          className="flex w-full items-center gap-1.5 rounded px-1.5 py-1 text-left text-xs hover:bg-muted"
+                          title={`${b.on} → ${b.other_schema}`}
+                        >
+                          <ArrowUpRight className="size-3 shrink-0 text-muted-foreground" aria-hidden />
+                          <span className="truncate">
+                            <span className="font-medium">{b.other_label}</span>
+                            <span className="text-muted-foreground"> · {b.other_schema}</span>
+                          </span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </Panel>
+            )}
           </ReactFlow>
         )}
       </div>

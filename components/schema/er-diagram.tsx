@@ -10,6 +10,12 @@
  * card-level fallback handle so an edge never silently vanishes. Layout is dagre
  * LR (see lib/graph-layout). Reliability is the only loud channel: suspect columns
  * amber, low-confidence FKs red-dashed, excluded tables/columns dimmed.
+ *
+ * D15: the ER graph self-fetches at the current `scope`. When the engine bounds
+ * the result it hands back `meta.truncated` (→ an "expand budget" banner) and
+ * cross-schema `boundary` stubs (→ a neutral, navigable off-canvas panel). Cross-
+ * schema boundaries are rendered as normal affordances, never warnings — red stays
+ * reserved for the reliability channel (low-confidence joins).
  */
 
 import { useEffect, useMemo } from "react";
@@ -18,6 +24,7 @@ import {
   Background,
   Controls,
   MiniMap,
+  Panel,
   Handle,
   Position,
   MarkerType,
@@ -30,15 +37,24 @@ import {
   type NodeMouseHandler,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { KeyRound, Link2, TriangleAlert } from "lucide-react";
+import { ArrowUpRight, KeyRound, Link2, TriangleAlert } from "lucide-react";
 
 import { cn } from "@/lib/utils";
+import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { QueryState } from "@/components/common/query-state";
 import { useFocusContext } from "@/components/schema/use-focus-context";
 import { useErGraph, useSchema } from "@/hooks/queries";
 import { layoutGraph, type LayoutEdge, type LayoutNode } from "@/lib/graph-layout";
-import type { ColumnView, ErGraph, TableView } from "@/lib/types";
+import type {
+  BoundaryEdge,
+  ColumnView,
+  ErGraph,
+  ErGraphEdge,
+  GraphSelection,
+  SchemaScope,
+  TableView,
+} from "@/lib/types";
 
 const CARD_W = 248;
 const HEADER_H = 40;
@@ -46,6 +62,9 @@ const ROW_H = 26;
 const PAD_Y = 6;
 const EDGE_STROKE = "#94a3b8";
 const LOW_STROKE = "#c0392b";
+/** Fallback node budget for the "expand" banner (mirrors the engine default). */
+const DEFAULT_BUDGET = 60;
+const BUDGET_STEP = 50;
 
 const cardHeight = (t: TableView) => HEADER_H + t.columns.length * ROW_H + PAD_Y * 2;
 const rowCenterY = (i: number) => HEADER_H + PAD_Y + i * ROW_H + ROW_H / 2;
@@ -55,6 +74,14 @@ const CARDINALITY_LABEL: Record<string, string> = {
   one_to_many: "1:N",
   one_to_one: "1:1",
   many_to_many: "N:N",
+};
+
+/* ── Locked view contract ─────────────────────────────────────────────────── */
+
+type GraphViewProps = {
+  scope?: SchemaScope;
+  onScopeChange?: (next: SchemaScope) => void;
+  onSelect: (selection: GraphSelection) => void;
 };
 
 /* ── Custom table-card node ───────────────────────────────────────────────── */
@@ -156,9 +183,10 @@ function parseSide(s: string | undefined): { table: string; col: string } | null
 }
 
 /** Resolve each edge endpoint to a column on the participating node, by matching
- * physical names in `on` to node ids. Returns null for a side we can't resolve. */
-function resolveEndpoints(er: ErGraph, edge: ErGraph["edges"][number]) {
-  const byPhysical = new Map(er.nodes.map((n) => [n.physical_name, n.id]));
+ * physical names in `on` to node ids. `byPhysical` (physical_name → node id) is
+ * built ONCE per layout pass and threaded in — the map is O(N), so rebuilding it
+ * inside every edge would be O(E·N). Returns null for a side we can't resolve. */
+function resolveEndpoints(byPhysical: Map<string, string>, edge: ErGraphEdge) {
   const [lhs, rhs] = edge.on.split("=");
   const sides = [parseSide(lhs), parseSide(rhs)];
   const colFor = (nodeId: string): string | null => {
@@ -172,42 +200,68 @@ function resolveEndpoints(er: ErGraph, edge: ErGraph["edges"][number]) {
 
 /* ── View ─────────────────────────────────────────────────────────────────── */
 
-export function ErDiagram({ onSelect }: { onSelect: (nodeId: string) => void }) {
+export function ErDiagram({ scope, onScopeChange, onSelect }: GraphViewProps) {
+  // /schema is the per-column source (card bodies + handles); /graph (scoped) is
+  // the authoritative in-scope table + FK set plus meta/boundary.
   const schema = useSchema();
-  const er = useErGraph();
+  const er = useErGraph(scope);
 
   return (
     <QueryState
-      query={schema}
-      isEmpty={(tables) => tables.length === 0}
+      query={er}
+      isEmpty={(g) => g.nodes.length === 0}
       emptyMessage="No tables to diagram."
       skeleton={<Skeleton className="h-[70vh] w-full" />}
     >
-      {(tables) => (
-        <ErCanvas tables={tables} er={er.data ?? { nodes: [], edges: [] }} onSelect={onSelect} />
+      {(graph) => (
+        <ErCanvas
+          graph={graph}
+          tableDump={schema.data ?? []}
+          scope={scope}
+          onScopeChange={onScopeChange}
+          onSelect={onSelect}
+        />
       )}
     </QueryState>
   );
 }
 
 function ErCanvas({
-  tables,
-  er,
+  graph,
+  tableDump,
+  scope,
+  onScopeChange,
   onSelect,
 }: {
-  tables: TableView[];
-  er: ErGraph;
-  onSelect: (nodeId: string) => void;
+  graph: ErGraph;
+  /** Full /schema dump — the per-column detail source for card bodies/handles. */
+  tableDump: TableView[];
+  scope?: SchemaScope;
+  onScopeChange?: (next: SchemaScope) => void;
+  onSelect: (selection: GraphSelection) => void;
 }) {
   const computed = useMemo(() => {
+    // Cards are the scoped ER nodes joined to /schema for their columns; a node
+    // without a matching TableView (schema still loading, or an unlisted table)
+    // is skipped rather than fabricated.
+    const dumpById = new Map(tableDump.map((t) => [t.id, t]));
+    const tables: TableView[] = graph.nodes
+      .map((n) => dumpById.get(n.id))
+      .filter((t): t is TableView => t !== undefined);
+
     const byId = new Map(tables.map((t) => [t.id, t]));
+    // Hoisted once: physical_name → node id, reused by every edge (avoids O(E·N)).
+    const byPhysical = new Map(graph.nodes.map((n) => [n.physical_name, n.id]));
 
     const layoutNodes: LayoutNode[] = tables.map((t) => ({
       id: t.id,
       width: CARD_W,
       height: cardHeight(t),
     }));
-    const layoutEdges: LayoutEdge[] = er.edges.map((e) => ({ source: e.source, target: e.target }));
+    // Only edges whose endpoints both have a rendered card (defensive: keeps
+    // React Flow from referencing a missing node).
+    const scopedEdges = graph.edges.filter((e) => byId.has(e.source) && byId.has(e.target));
+    const layoutEdges: LayoutEdge[] = scopedEdges.map((e) => ({ source: e.source, target: e.target }));
     const pos = layoutGraph(layoutNodes, layoutEdges, { direction: "LR", rankSep: 140 });
 
     const nodes: ErFlowNode[] = tables.map((t) => ({
@@ -220,8 +274,8 @@ function ErCanvas({
       data: { table: t },
     }));
 
-    const edges: Edge[] = er.edges.map((e) => {
-      const { srcCol, tgtCol } = resolveEndpoints(er, e);
+    const edges: Edge[] = scopedEdges.map((e) => {
+      const { srcCol, tgtCol } = resolveEndpoints(byPhysical, e);
       const srcHasCol = srcCol && byId.get(e.source)?.columns.some((c) => c.physical_name === srcCol);
       const tgtHasCol = tgtCol && byId.get(e.target)?.columns.some((c) => c.physical_name === tgtCol);
       const low = e.low_confidence;
@@ -245,7 +299,7 @@ function ErCanvas({
     });
 
     return { nodes, edges };
-  }, [tables, er]);
+  }, [graph, tableDump]);
 
   const [nodes, setNodes, onNodesChange] = useNodesState<ErFlowNode>(computed.nodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>(computed.edges);
@@ -255,21 +309,23 @@ function ErCanvas({
     setEdges(computed.edges);
   }, [computed, setNodes, setEdges]);
 
-  const handleNodeClick: NodeMouseHandler<ErFlowNode> = (_e, node) => onSelect(node.id);
+  const handleNodeClick: NodeMouseHandler<ErFlowNode> = (_e, node) =>
+    onSelect({ id: node.id, kind: "table", label: node.data.table.physical_name });
 
   // Focus+context: hovering a table dims everything outside its FK neighborhood.
   // The edge path, its label <text>, and the label bg <rect> are separate elements,
   // so dim all three (via style/labelStyle/labelBgStyle) — otherwise the "N:1"
   // label stays bright while its edge fades.
   const focus = useFocusContext(edges);
+  const { dimNode, dimEdge } = focus;
   const shownNodes = useMemo(
-    () => nodes.map((n) => ({ ...n, style: { ...n.style, opacity: focus.dimNode(n.id) ? 0.25 : 1 } })),
-    [nodes, focus.dimNode],
+    () => nodes.map((n) => ({ ...n, style: { ...n.style, opacity: dimNode(n.id) ? 0.25 : 1 } })),
+    [nodes, dimNode],
   );
   const shownEdges = useMemo(
     () =>
       edges.map((e) => {
-        const o = focus.dimEdge(e.source, e.target) ? 0.12 : 1;
+        const o = dimEdge(e.source, e.target) ? 0.12 : 1;
         return {
           ...e,
           style: { ...e.style, opacity: o },
@@ -277,8 +333,22 @@ function ErCanvas({
           labelBgStyle: { ...(e.labelBgStyle ?? {}), opacity: o },
         };
       }),
-    [edges, focus.dimEdge],
+    [edges, dimEdge],
   );
+
+  const meta = graph.meta;
+  const hiddenCount = meta ? meta.total_nodes - meta.returned_nodes : 0;
+  const boundary = graph.boundary ?? [];
+
+  const expandBudget = () =>
+    onScopeChange?.({ ...scope, nodeBudget: (scope?.nodeBudget ?? DEFAULT_BUDGET) + BUDGET_STEP });
+
+  // Cross-schema boundary → navigate: narrow scope to the other schema focused on
+  // the target table, and lift the selection so the detail sheet opens.
+  const navigateBoundary = (b: BoundaryEdge) => {
+    onScopeChange?.({ schema: b.other_schema, focus: b.other_table_id });
+    onSelect({ id: b.other_table_id, kind: "table", label: b.other_label });
+  };
 
   return (
     <div className="h-[70vh] w-full rounded-md border bg-card">
@@ -292,13 +362,59 @@ function ErCanvas({
         onNodeMouseEnter={(_e, n) => focus.focus(n.id)}
         onNodeMouseLeave={() => focus.clear()}
         nodesConnectable={false}
-        fitView
-        minZoom={0.2}
+        onlyRenderVisibleElements
+        defaultViewport={{ x: 0, y: 0, zoom: 0.75 }}
+        minZoom={0.4}
+        maxZoom={1.5}
         proOptions={{ hideAttribution: true }}
       >
         <Background />
+        {/* Controls includes a manual fit-view button — no auto-fit-to-everything. */}
         <Controls showInteractive={false} />
         <MiniMap pannable zoomable className="bg-muted!" />
+
+        {meta?.truncated && hiddenCount > 0 && (
+          <Panel position="top-center">
+            <button
+              type="button"
+              onClick={expandBudget}
+              className="rounded-full border bg-card/95 px-3 py-1 text-xs font-medium shadow-sm backdrop-blur transition-colors hover:bg-muted"
+            >
+              {hiddenCount} more — expand
+            </button>
+          </Panel>
+        )}
+
+        {boundary.length > 0 && (
+          <Panel position="top-right">
+            <div className="w-60 max-h-[60vh] space-y-1.5 overflow-auto rounded-md border bg-card/95 p-2 shadow-sm backdrop-blur">
+              <div className="px-1 text-[0.65rem] font-semibold uppercase tracking-wide text-muted-foreground">
+                Related tables
+              </div>
+              {boundary.map((b) => (
+                <button
+                  key={b.id}
+                  type="button"
+                  onClick={() => navigateBoundary(b)}
+                  className="group flex w-full flex-col gap-0.5 rounded-md border border-transparent px-2 py-1.5 text-left transition-colors hover:border-border hover:bg-muted"
+                >
+                  <div className="flex items-center gap-1.5">
+                    <span className="truncate font-mono text-xs font-medium" title={b.other_label}>
+                      {b.other_label}
+                    </span>
+                    <Badge variant="outline" className="shrink-0 text-[0.6rem] font-normal">
+                      {b.other_schema}
+                    </Badge>
+                    <ArrowUpRight className="ml-auto size-3 shrink-0 text-muted-foreground transition-colors group-hover:text-foreground" />
+                  </div>
+                  <span className="truncate font-mono text-[0.6rem] text-muted-foreground" title={b.on}>
+                    {b.on}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </Panel>
+        )}
       </ReactFlow>
     </div>
   );
