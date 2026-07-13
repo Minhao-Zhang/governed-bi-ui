@@ -63,9 +63,9 @@ export type SearchResponse = z.infer<typeof searchResponseSchema>;
 
 /**
  * Normalized catalog row for the search omnibox + schema rail. Produced
- * client-side from either the full `/schema` dump (`namespace` ← `db`, fallback
- * mode) or the lean `/schema/summary` (`namespace` ← `schema`, scoped mode), so
- * the rail/search are source-agnostic and survive the eventual db→schema rename.
+ * client-side from either the full `/schema` dump or the lean `/schema/summary`
+ * (both expose wire ``schema`` → ``namespace`` here), so the rail/search are
+ * source-agnostic.
  */
 export interface CatalogItem {
   id: string;

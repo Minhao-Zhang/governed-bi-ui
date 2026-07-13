@@ -50,8 +50,9 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { layoutGraph } from "@/lib/graph-layout";
+import { annotateNodeSchemas, applyKnowledgeGraphScope, DEFAULT_KG_BUDGET, withDefaultBudget } from "@/lib/graph-scope";
 import { useFocusContext } from "@/components/schema/use-focus-context";
-import { useKnowledgeGraph } from "@/hooks/queries";
+import { useCatalog, useKnowledgeGraph } from "@/hooks/queries";
 import type {
   BoundaryEdge,
   GraphNode,
@@ -148,7 +149,7 @@ const EDGE_STROKE = "#94a3b8";
 const CROSS_SCHEMA_STROKE = "#0d9488";
 
 /** Default node budget for the semantic graph (bounds a scoped/truncated fetch). */
-const DEFAULT_NODE_BUDGET = 150;
+const DEFAULT_NODE_BUDGET = DEFAULT_KG_BUDGET;
 
 /** Cool, reliability-safe accents for per-schema grouping (no green/amber/red). */
 const SCHEMA_ACCENTS = ["#0891b2", "#7c3aed", "#4f46e5", "#2563eb", "#0284c7", "#0d9488", "#4338ca"];
@@ -387,7 +388,21 @@ function KnowledgeGraphInner({ scope, onScopeChange, onSelect }: GraphViewProps)
   // Self-fetch: when can_scope is false the hook returns the full graph and the
   // scope is a no-op, so we pass it through without branching.
   const { data, isLoading, isError } = useKnowledgeGraph(scope);
-  const graph = data ?? EMPTY_GRAPH;
+  // Namespace membership for table nodes — live /knowledge-graph omits `schema`
+  // and ignores ?schema=, so we annotate from the catalog then apply client scope.
+  const { items: catalog } = useCatalog();
+  const namespaceById = useMemo(
+    () => new Map(catalog.map((it) => [it.id, it.namespace])),
+    [catalog],
+  );
+  const graph = useMemo(() => {
+    const base = data ?? EMPTY_GRAPH;
+    const annotated = {
+      ...base,
+      nodes: annotateNodeSchemas(base.nodes, namespaceById),
+    };
+    return applyKnowledgeGraphScope(annotated, withDefaultBudget(scope, DEFAULT_KG_BUDGET));
+  }, [data, scope, namespaceById]);
   const rf = useReactFlow();
 
   // Which kinds actually appear, in canonical column order — drives the filters.

@@ -83,7 +83,7 @@ function tableToRow(t: TableView): BrowserRow {
   return {
     id: t.id,
     physical_name: t.physical_name,
-    namespace: t.db,
+    namespace: t.schema,
     row_count: t.row_count,
     grain: t.grain,
     excluded: t.excluded,
@@ -295,9 +295,15 @@ export function TableBrowser({
   const full = useSchema({ enabled: !scoped });
 
   const rows = useMemo<BrowserRow[]>(() => {
-    if (scoped) return (summary.data?.items ?? []).map(summaryToRow);
-    return (full.data ?? []).map(tableToRow);
-  }, [scoped, summary.data, full.data]);
+    if (scoped) {
+      let items = summary.data?.items ?? [];
+      if (scope?.schema) items = items.filter((t) => t.schema === scope.schema);
+      return items.map(summaryToRow);
+    }
+    let tables = full.data ?? [];
+    if (scope?.schema) tables = tables.filter((t) => t.schema === scope.schema);
+    return tables.map(tableToRow);
+  }, [scoped, summary.data, full.data, scope?.schema]);
 
   const isLoading = scoped ? summary.isLoading : full.isLoading;
 

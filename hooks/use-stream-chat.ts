@@ -10,9 +10,8 @@
  * The serve graph is a single `answer` node that emits custom stage events
  * (`{ stage: "route" | "retrieve" | … }`) as it works; we map each to a UI stage
  * through `nodeToStage` so the StageStepper reflects real backend progress, never
- * a timer. The terminal AnswerView rides on the assistant message's
- * `additional_kwargs.governed_bi`; while tokens are still streaming (before that
- * lands) we fall back to the message's plain text.
+ * a timer. The terminal AnswerView prefers `stream.values.answer` (handoff §3);
+ * per-message `additional_kwargs.governed_bi` remains a fallback for older stamps.
  */
 
 import { useRef, useState } from "react";
@@ -24,6 +23,7 @@ import { useRestChat } from "@/hooks/use-rest-chat";
 import { ASSISTANT_ID, LANGGRAPH_URL } from "@/lib/env";
 import { answerViewSchema } from "@/lib/schemas";
 import { nodeToStage, STAGE_IDS, type StageId } from "@/lib/stages";
+import type { AnswerView } from "@/lib/types";
 
 /**
  * The slice of graph state we care about. `messages` is loosely typed so the
@@ -57,6 +57,11 @@ function flattenContent(content: unknown): string {
   return "";
 }
 
+function parseAnswer(raw: unknown): AnswerView | null {
+  const parsed = answerViewSchema.safeParse(raw);
+  return parsed.success ? parsed.data : null;
+}
+
 export function useStreamChat(): ChatTransport {
   const [activeStage, setActiveStage] = useState<StageId | null>(null);
 
@@ -87,6 +92,16 @@ export function useStreamChat(): ChatTransport {
   });
 
   const isRunning = stream.isLoading;
+  // Channel answer (handoff §3) — used for the latest assistant turn when present.
+  const channelAnswer = parseAnswer(stream.values?.answer);
+
+  let lastAssistantIndex = -1;
+  for (let i = stream.messages.length - 1; i >= 0; i--) {
+    if (stream.messages[i]?.type !== "human") {
+      lastAssistantIndex = i;
+      break;
+    }
+  }
 
   const messages: ChatMessage[] = stream.messages
     .map((message, index): ChatMessage | null => {
@@ -96,12 +111,16 @@ export function useStreamChat(): ChatTransport {
         return { id, role: "user", text: flattenContent(message.content) };
       }
 
-      // Any non-human message is an assistant turn. Prefer the per-turn
-      // AnswerView stamped on the message; fall back to streamed text.
+      // Prefer the graph-state answer channel on the latest assistant message
+      // once the run finishes; fall back to per-message stamps / streamed text.
+      if (index === lastAssistantIndex && channelAnswer && !isRunning) {
+        return { id, role: "assistant", answer: channelAnswer };
+      }
+
       const governed = message.additional_kwargs?.governed_bi;
       if (governed != null) {
-        const parsed = answerViewSchema.safeParse(governed);
-        if (parsed.success) return { id, role: "assistant", answer: parsed.data };
+        const parsed = parseAnswer(governed);
+        if (parsed) return { id, role: "assistant", answer: parsed };
       }
 
       const text = flattenContent(message.content);
@@ -112,6 +131,19 @@ export function useStreamChat(): ChatTransport {
     })
     .filter((message): message is ChatMessage => message !== null);
 
+  // If the channel answer landed with no assistant message frame yet, append one.
+  if (
+    !isRunning &&
+    channelAnswer &&
+    !messages.some((m) => m.role === "assistant" && m.answer != null)
+  ) {
+    messages.push({
+      id: "channel-answer",
+      role: "assistant",
+      answer: channelAnswer,
+    });
+  }
+
   const send = (question: string) => {
     if (degradedRef.current) {
       rest.send(question);
@@ -121,7 +153,10 @@ export function useStreamChat(): ChatTransport {
     if (!trimmed || isRunning) return;
     pendingRef.current = trimmed;
     setActiveStage(STAGE_IDS[0] ?? null);
-    void stream.submit({ messages: [{ type: "human", content: trimmed }] });
+    void stream.submit(
+      { messages: [{ type: "human", content: trimmed }] },
+      { streamMode: ["values", "messages", "custom"] },
+    );
   };
 
   // Once degraded, the REST transport owns the whole transcript + sends.

@@ -11,6 +11,7 @@
 
 export const STAGES = [
   { id: "route", label: "Routing" },
+  { id: "schema_route", label: "Selecting schema" },
   { id: "retrieve", label: "Retrieving" },
   { id: "generate", label: "Generating SQL" },
   { id: "guardrail", label: "Checking guardrails" },
@@ -26,6 +27,7 @@ const STAGE_ALIASES: Record<string, StageId> = {
   route: "route",
   routing: "route",
   refuse_gate: "route", // fast-path refusal folds into the routing step
+  schema_route: "schema_route", // interim schema shortlist (§13.6)
   retrieve: "retrieve",
   retrieval: "retrieve",
   cache_hit: "generate", // semantic-cache hit supplies the SQL → show as generate

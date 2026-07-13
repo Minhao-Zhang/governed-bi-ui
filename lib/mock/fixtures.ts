@@ -27,8 +27,7 @@ import type {
 // Two namespaces so the schema rail and cross-schema boundary are exercised
 // offline. The FK columns already cross these (table_c/table_d in `billing`
 // reference table_a/table_b in `sales`), so joins across them are the D15
-// navigable cross-schema case. The wire field is still `db` (renamed to
-// `schema` in lockstep with the engine); mock catalog/graph nodes use `schema`.
+// navigable cross-schema case. Namespace wire field is ``schema``.
 const SALES = "sales";
 const BILLING = "billing";
 
@@ -74,7 +73,7 @@ export const MOCK_SCHEMA: TableView[] = [
   {
     id: "table_a",
     physical_name: "table_a",
-    db: SALES,
+    schema: SALES,
     row_count: 1000,
     description: "Placeholder root table (one row per entity).",
     grain: "one row per entity",
@@ -124,7 +123,7 @@ export const MOCK_SCHEMA: TableView[] = [
   {
     id: "table_b",
     physical_name: "table_b",
-    db: SALES,
+    schema: SALES,
     row_count: 25000,
     description: "Placeholder fact table (one row per event).",
     grain: "one row per event",
@@ -210,7 +209,7 @@ export const MOCK_SCHEMA: TableView[] = [
   {
     id: "table_c",
     physical_name: "table_c",
-    db: BILLING,
+    schema: BILLING,
     row_count: 8000,
     description: "Placeholder secondary fact table.",
     grain: "one row per record",
@@ -260,7 +259,7 @@ export const MOCK_SCHEMA: TableView[] = [
   {
     id: "table_d",
     physical_name: "table_d",
-    db: BILLING,
+    schema: BILLING,
     row_count: 40,
     description: "Placeholder dimension table.",
     grain: "one row per category",
@@ -319,7 +318,7 @@ export const MOCK_SCHEMA_SUMMARY: SchemaSummaryResponse = {
   items: MOCK_SCHEMA.map((t) => ({
     id: t.id,
     physical_name: t.physical_name,
-    schema: t.db,
+    schema: t.schema,
     row_count: t.row_count,
     n_columns: t.columns.length,
     excluded: t.excluded,
@@ -410,7 +409,7 @@ export const MOCK_SKILLS: SkillView[] = [
   {
     skill_id: "routing",
     kind: "routing",
-    db: SALES,
+    schema: SALES,
     body: [
       "# Routing skill",
       "",
@@ -441,9 +440,10 @@ export const MOCK_ANSWER: AnswerView = {
     metric_id: "metric_total",
     tables_used: ["table_b", "table_a", "table_d"],
     join_ids: ["join_b_a", "join_d_b"],
-    min_join_confidence: 0.55,
+    min_join_confidence: 0.92,
     attempts: 1,
-    uncertainty_flags: ["low_confidence_join"],
+    uncertainty_flags: [],
+    routed_schemas: ["sales", "billing"],
     cache_hit: false,
     session_id: "mock-session",
     user: "demo",
@@ -458,6 +458,39 @@ export const MOCK_ANSWER: AnswerView = {
     ],
     row_count: 40,
     truncated: true,
+  },
+};
+
+/** Graded delivery: SQL + result present, but assurance is unverified (§13.2). */
+export const MOCK_GRADED_ANSWER: AnswerView = {
+  tier: "fenced_raw",
+  safety_clearance: true,
+  semantic_assurance: "unverified",
+  text: "Graded placeholder: returned rows, but this answer could not be fully verified. (Synthetic — no backend attached.)",
+  sql: "SELECT a.name, SUM(b.amount) AS total\nFROM table_a a\nJOIN table_b b ON b.a_id = a.id\nGROUP BY a.name\nLIMIT 5;",
+  escalation: null,
+  provenance: {
+    route: "fenced_raw",
+    tables_used: ["table_a", "table_b"],
+    join_ids: ["join_b_a"],
+    min_join_confidence: 0.55,
+    attempts: 2,
+    uncertainty_flags: ["fenced_raw_fallback", "low_confidence_join", "repaired"],
+    graded_delivery: true,
+    refused_by: "missing_edge",
+    routed_schemas: ["sales"],
+    cache_hit: false,
+    session_id: "mock-session",
+    user: "demo",
+  },
+  result: {
+    columns: ["name", "total"],
+    rows: [
+      ["alpha", 420.0],
+      ["beta", 310.5],
+    ],
+    row_count: 2,
+    truncated: false,
   },
 };
 

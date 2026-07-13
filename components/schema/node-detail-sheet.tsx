@@ -98,7 +98,7 @@ function TableDetail({ table }: { table: TableView }) {
     <div className="space-y-4 px-4 pb-8">
       <div className="flex flex-wrap items-center gap-2">
         <Badge variant="outline" className="font-mono">
-          {table.db}
+          {table.schema}
         </Badge>
         {table.excluded && (
           <Badge

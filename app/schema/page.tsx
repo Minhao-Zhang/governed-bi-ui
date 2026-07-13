@@ -38,7 +38,7 @@ export default function SchemaPage() {
   const handleSelect = (sel: GraphSelection) => setSelection(sel);
 
   // The rail lists the whole corpus's namespaces (independent of the active scope).
-  const { items } = useCatalog({});
+  const { items } = useCatalog();
   const namespaces = useMemo(() => groupByNamespace(items), [items]);
 
   // Resolve the focused table's physical name for the breadcrumb (best-effort).

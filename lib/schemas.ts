@@ -6,6 +6,9 @@
  *
  * TypeScript types are inferred from these schemas (see `lib/types.ts`) — one
  * source of truth.
+ *
+ * Namespace wire name is ``schema`` only (D15). The engine does not emit or
+ * accept ``db`` for namespace filtering or response fields.
  */
 
 import { z } from "zod";
@@ -83,7 +86,7 @@ export const columnViewSchema = z.object({
 export const tableViewSchema = z.object({
   id: z.string(),
   physical_name: z.string(),
-  db: z.string(), // namespace; D15 renames this wire field to `schema` in lockstep
+  schema: z.string(),
   row_count: z.number().nullable(),
   description: z.string().nullable(),
   grain: z.string().nullable(),
@@ -96,9 +99,7 @@ export const tableViewSchema = z.object({
 
 /* ── /schema/summary — lean, scopeable catalog (D15, gated on can_scope) ──── */
 // Lean projection for the virtualized browser + client search index: drops the
-// heavy per-column fields (sample_values/evidence/description). This is a
-// D15-only route, so its namespace field is already the renamed `schema` (a
-// pre-D15 engine never serves it, so there is no legacy `db` to carry here).
+// heavy per-column fields (sample_values/evidence/description).
 
 export const leanColumnSchema = z.object({
   physical_name: z.string(),
@@ -150,8 +151,7 @@ export const graphNodeSchema = z.object({
   provenance_status: z.string().nullable(),
   confidence: z.number().nullable().optional(),
   has_suspect: z.boolean().optional(),
-  // D15: the schema namespace this node belongs to. Additive + nullable so a
-  // pre-D15 response (which omits it) still validates; drives schema grouping.
+  // D15: namespace additive + nullable; non-table nodes omit it.
   schema: z.string().nullable().optional(),
 });
 
@@ -202,11 +202,12 @@ export const graphMetaSchema = z.object({
 });
 
 // `boundary` + `meta` are optional so a pre-D15 bare {nodes,edges} still parses.
+// Live engine may send explicit `null` (not omit) when unscoped — accept nullish.
 export const knowledgeGraphSchema = z.object({
   nodes: z.array(graphNodeSchema),
   edges: z.array(graphEdgeSchema),
-  boundary: z.array(boundaryEdgeSchema).optional(),
-  meta: graphMetaSchema.optional(),
+  boundary: z.array(boundaryEdgeSchema).nullish(),
+  meta: graphMetaSchema.nullish(),
 });
 
 /* ── /graph (ER: tables + joins, with FK cardinality + predicate) ─────────── */
@@ -221,7 +222,7 @@ export const erGraphNodeSchema = z.object({
   n_columns: z.number(),
   excluded: z.boolean(),
   has_suspect: z.boolean(),
-  // D15: schema namespace (additive + nullable; pre-D15 responses omit it).
+  // D15: schema namespace (additive + nullable).
   schema: z.string().nullable().optional(),
 });
 
@@ -238,8 +239,8 @@ export const erGraphEdgeSchema = z.object({
 export const erGraphSchema = z.object({
   nodes: z.array(erGraphNodeSchema),
   edges: z.array(erGraphEdgeSchema),
-  boundary: z.array(boundaryEdgeSchema).optional(),
-  meta: graphMetaSchema.optional(),
+  boundary: z.array(boundaryEdgeSchema).nullish(),
+  meta: graphMetaSchema.nullish(),
 });
 
 /* ── /corpus/assets, /skills ─────────────────────────────────────────────── */
@@ -255,7 +256,7 @@ export const assetRowSchema = z.object({
 export const skillViewSchema = z.object({
   skill_id: z.string(),
   kind: z.string(),
-  db: z.string(),
+  schema: z.string(),
   body: z.string(),
 });
 

@@ -28,11 +28,11 @@ export function useHealth() {
 }
 
 /** The full flat `/schema` dump — the pre-D15 fallback + the column-detail and
- * catalog source when the engine cannot scope. */
-export function useSchema(options?: { enabled?: boolean }) {
+ * catalog source when the engine cannot scope. Optional `schema` → wire `?schema=`. */
+export function useSchema(options?: { enabled?: boolean; schema?: string }) {
   return useQuery({
-    queryKey: ["schema"],
-    queryFn: api.schema,
+    queryKey: options?.schema ? (["schema", options.schema] as const) : (["schema"] as const),
+    queryFn: () => api.schema({ schema: options?.schema }),
     enabled: options?.enabled ?? true,
   });
 }
@@ -46,7 +46,8 @@ export function useSchemaSummary(scope?: SchemaScope, options?: { enabled?: bool
     queryKey: ["schema-summary", scope?.schema ?? null],
     queryFn: () => api.schemaSummary({ schema: scope?.schema }),
     enabled,
-    placeholderData: keepPreviousData,
+    // Do NOT keepPreviousData: client filters stale items by the new namespace and
+    // would flash an empty catalog while the next summary loads.
   });
 }
 
@@ -106,11 +107,22 @@ export function useCatalog(scope?: SchemaScope) {
   const scoped = canScope(caps);
   const summary = useSchemaSummary(scope, { enabled: scoped });
   const full = useSchema({ enabled: !scoped });
+  // Primitive dep — callers often pass a fresh `{}` / scope object each render.
+  const schemaFilter = scope?.schema;
 
   const items = useMemo<CatalogItem[]>(() => {
-    if (scoped) return summary.data ? summaryToCatalog(summary.data.items) : [];
-    return full.data ? toCatalog(full.data) : [];
-  }, [scoped, summary.data, full.data]);
+    const raw = scoped
+      ? summary.data
+        ? summaryToCatalog(summary.data.items)
+        : []
+      : full.data
+        ? toCatalog(full.data)
+        : [];
+    // Belt-and-suspenders: keep the catalog aligned with the active namespace even
+    // if a live summary response ignored the wire `schema` filter.
+    if (schemaFilter) return raw.filter((it) => it.namespace === schemaFilter);
+    return raw;
+  }, [scoped, summary.data, full.data, schemaFilter]);
 
   return {
     items,

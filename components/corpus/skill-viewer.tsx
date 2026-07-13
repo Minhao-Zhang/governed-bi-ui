@@ -35,7 +35,7 @@ export function SkillViewer() {
   );
 }
 
-/** A single skill: id + kind badge + db header, then its markdown body. */
+/** A single skill: id + kind badge + schema header, then its markdown body. */
 function SkillCard({ skill }: { skill: SkillView }) {
   return (
     <Card>
@@ -45,7 +45,7 @@ function SkillCard({ skill }: { skill: SkillView }) {
           <Badge variant="secondary">{skill.kind}</Badge>
           <span className="inline-flex items-center gap-1 text-xs font-normal text-muted-foreground">
             <Database className="size-3" />
-            {skill.db}
+            {skill.schema}
           </span>
         </CardTitle>
       </CardHeader>

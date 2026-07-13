@@ -2,20 +2,20 @@
 
 /**
  * Corpus asset browser. Lists the non-table corpus assets (metrics, terms,
- * joins, rules, few-shots, negatives) with a type filter. Read-only by design:
- * an "Edit" affordance only appears when the attached backend reports it can
- * edit (`capabilities.can_edit`), and in mock mode it is a no-op that toasts.
+ * joins, rules, few-shots, negatives) with a type filter. An "Edit" affordance
+ * appears when `capabilities.can_edit`; it opens a sheet that POSTs to
+ * `/corpus/edit` and shows validation findings + diff.
  */
 
 import { useState } from "react";
 import { Pencil } from "lucide-react";
-import { toast } from "sonner";
 
 import { cn } from "@/lib/utils";
 import { ASSET_TYPES, type AssetRow, type AssetType } from "@/lib/types";
 import { canEdit } from "@/lib/capabilities";
 import { useAssets, useCapabilities } from "@/hooks/queries";
 import { QueryState } from "@/components/common/query-state";
+import { AssetEditSheet } from "@/components/corpus/asset-edit-sheet";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -52,6 +52,7 @@ export function AssetBrowser() {
   const assets = useAssets();
   const { data: caps } = useCapabilities();
   const [filter, setFilter] = useState<Filter>("all");
+  const [editRow, setEditRow] = useState<AssetRow | null>(null);
 
   const editable = canEdit(caps);
 
@@ -111,6 +112,7 @@ export function AssetBrowser() {
                     key={`${row.asset_type}:${row.id}`}
                     row={row}
                     editable={editable}
+                    onEdit={() => setEditRow(row)}
                   />
                 ))}
               </TableBody>
@@ -118,12 +120,28 @@ export function AssetBrowser() {
           );
         }}
       </QueryState>
+
+      <AssetEditSheet
+        row={editRow}
+        open={editRow !== null}
+        onOpenChange={(next) => {
+          if (!next) setEditRow(null);
+        }}
+      />
     </div>
   );
 }
 
 /** One asset row. Kept separate so the (optional) edit action stays tidy. */
-function AssetTableRow({ row, editable }: { row: AssetRow; editable: boolean }) {
+function AssetTableRow({
+  row,
+  editable,
+  onEdit,
+}: {
+  row: AssetRow;
+  editable: boolean;
+  onEdit: () => void;
+}) {
   return (
     <TableRow>
       <TableCell className="font-mono text-xs">{row.id}</TableCell>
@@ -155,12 +173,7 @@ function AssetTableRow({ row, editable }: { row: AssetRow; editable: boolean }) 
       </TableCell>
       {editable && (
         <TableCell className="text-right">
-          <Button
-            variant="ghost"
-            size="xs"
-            // Mock mode is strictly read-only: never write, just explain.
-            onClick={() => toast("Editing requires a connected dev backend")}
-          >
+          <Button variant="ghost" size="xs" onClick={onEdit}>
             <Pencil />
             Edit
           </Button>

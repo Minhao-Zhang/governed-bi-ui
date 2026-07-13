@@ -3,11 +3,9 @@
  * omnibox and the namespace rail, plus a Fuse index over them.
  *
  * The catalog is deliberately source-agnostic (`CatalogItem.namespace`): it is
- * projected from either the full `/schema` dump (fallback / pre-D15 engine, where
- * the namespace field is `db`) or the lean `/schema/summary` (D15, where it is
- * `schema`). Keeping the projection here means the rest of the UI never branches
- * on which endpoint served the data, and the eventual db→schema rename touches
- * only the two projection functions below.
+ * projected from either the full `/schema` dump or the lean `/schema/summary`
+ * (both expose wire ``schema``). Keeping the projection here means the rest of
+ * the UI never branches on which endpoint served the data.
  *
  * Q6 (D15): server `/search` stays deferred, so this client Fuse index is the
  * default — and permanent at expected corpus sizes.
@@ -22,7 +20,7 @@ export function toCatalog(tables: TableView[]): CatalogItem[] {
   return tables.map((t) => ({
     id: t.id,
     physical_name: t.physical_name,
-    namespace: t.db, // db→schema rename lands here in lockstep with the engine
+    namespace: t.schema,
     row_count: t.row_count,
     n_columns: t.columns.length,
     excluded: t.excluded,

@@ -1,8 +1,16 @@
 # Schema Visualization at Scale — Findings, Proposed Design, and Open Questions
 
-**Status:** Draft for discussion with the backend/engine owner
+> **Superseded (2026-07-12).** This draft captured the pre-D15 discussion.
+> **Current wire contract:** namespace is **`schema` only** — no `?db=` / response
+> `db`. See engine `docs/ui-frontend-handoff.md` §4 / §10 and
+> `docs/openapi.json`. **Shipped:** server-side graph scoping (`?schema=` /
+> focus / radius / node_budget + `boundary` / `meta`); UI prefers engine
+> `meta.scope` when it matches and keeps client re-scope as fallback. Keep this
+> file for historical Q1–Q8 context; do not treat `?db=` examples below as live.
+
+**Status:** Historical draft (superseded by D15 wire hard-cut)
 **Author:** Frontend (governed-bi-ui)
-**Date:** 2026-07-11
+**Date:** 2026-07-11 (banner added 2026-07-12)
 **Companion repos:** `governed-bi-ui` (this repo, pure frontend) ↔ `governed-bi` (engine, contract source of truth)
 
 ---

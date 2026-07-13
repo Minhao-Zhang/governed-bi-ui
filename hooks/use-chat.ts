@@ -23,7 +23,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { MOCK_ANSWER, MOCK_REFUSAL } from "@/lib/mock/fixtures";
+import { MOCK_ANSWER, MOCK_GRADED_ANSWER, MOCK_REFUSAL } from "@/lib/mock/fixtures";
 import { STAGE_IDS, type StageId } from "@/lib/stages";
 import type { AnswerView } from "@/lib/types";
 
@@ -58,6 +58,15 @@ export interface UseChatResult extends ChatTransport {
  * for the engine's negative-example / excluded-field fail-closed behavior.
  */
 const REFUSAL_PATTERN = /restrict|exclud|pii|card|secret|password/i;
+
+/** Questions matching this route to a graded-delivery fixture (§13). */
+const GRADED_PATTERN = /graded|unverified|fenced/i;
+
+function mockAnswerFor(question: string): AnswerView {
+  if (REFUSAL_PATTERN.test(question)) return MOCK_REFUSAL;
+  if (GRADED_PATTERN.test(question)) return MOCK_GRADED_ANSWER;
+  return MOCK_ANSWER;
+}
 
 /** Milliseconds each pipeline stage is shown before advancing to the next. */
 const STAGE_INTERVAL_MS = 250;
@@ -117,7 +126,7 @@ export function useChat(): UseChatResult {
 
         // Final stage completed → resolve and stop the pipeline.
         clearTimer();
-        const answer: AnswerView = REFUSAL_PATTERN.test(trimmed) ? MOCK_REFUSAL : MOCK_ANSWER;
+        const answer = mockAnswerFor(trimmed);
         setMessages((prev) => [...prev, { id: nextId(), role: "assistant", answer }]);
         setIsRunning(false);
         setActiveStage(null);

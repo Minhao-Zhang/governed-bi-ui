@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Schema-tab search omnibox. A single text input over the scoped catalog: the
+ * Schema-tab search omnibox. A single text input over the full catalog: the
  * default engine is the synchronous client Fuse index (`useCatalogSearch`), and
  * when the backend reports `can_search` the server-ranked `/search` reorders the
  * same catalog rows (falling back to the client order when the server query is
@@ -44,7 +44,8 @@ export function SchemaSearch({
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
 
-  const { items } = useCatalog(scope);
+  // Search the whole corpus; picking a hit still narrows the rail scope.
+  const { items } = useCatalog();
   const clientResults = useCatalogSearch(items, query);
   const server = useServerSearch(query); // no-op unless can_search
 

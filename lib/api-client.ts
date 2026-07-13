@@ -18,6 +18,7 @@ import {
   MOCK_ASSETS,
   MOCK_CAPABILITIES,
   MOCK_ER_GRAPH,
+  MOCK_GRADED_ANSWER,
   MOCK_GRAPH,
   MOCK_HEALTH,
   MOCK_REFUSAL,
@@ -29,7 +30,7 @@ import {
   applyErGraphScope,
   applyKnowledgeGraphScope,
   filterSummaryItems,
-} from "@/lib/mock/scope";
+} from "@/lib/graph-scope";
 import {
   answerViewSchema,
   assetListSchema,
@@ -63,6 +64,7 @@ import type {
 /** Questions routed to a refusal in mock mode (mirrors the engine's fail-closed
  * negative-example / excluded-field gates). */
 const MOCK_REFUSAL_PATTERN = /restrict|exclud|pii|card|secret|password/i;
+const MOCK_GRADED_PATTERN = /graded|unverified|fenced/i;
 
 export class ApiError extends Error {
   constructor(
@@ -107,7 +109,7 @@ function qs(params: Record<string, string | number | undefined | null>): string 
   return parts.length ? `?${parts.join("&")}` : "";
 }
 
-/** Map a UI `SchemaScope` onto the D15 graph query params. */
+/** Map a UI `SchemaScope` onto the engine's query params (``schema`` wire name). */
 function scopeQuery(scope?: SchemaScope): string {
   if (!scope) return "";
   return qs({
@@ -142,8 +144,16 @@ export const api = {
 
   /** The full flat schema dump (GET /schema). Retained as the pre-D15 fallback
    * and the source the client Fuse index / lazy detail read from when the engine
-   * cannot scope (capabilities.can_scope === false). */
-  schema: (): Promise<TableView[]> => get("/schema", schemaListSchema, MOCK_SCHEMA),
+   * cannot scope (capabilities.can_scope === false). Optional `schema` → `?schema=`. */
+  schema: (scope?: { schema?: string } ): Promise<TableView[]> => {
+    if (USE_MOCKS) {
+      const tables = scope?.schema
+        ? MOCK_SCHEMA.filter((t) => t.schema === scope.schema)
+        : MOCK_SCHEMA;
+      return Promise.resolve(tables);
+    }
+    return getLive(`/schema${qs({ schema: scope?.schema })}`, schemaListSchema);
+  },
 
   /** Lean, scopeable, paginated catalog (GET /schema/summary; D15, gated on
    * can_scope). Backs the virtualized browser + the search index. */
@@ -221,7 +231,9 @@ export const api = {
    * reports `can_stream: false`. Streaming chat uses `useStream` instead. */
   chat: (question: string, history: ChatTurn[], sessionId: string): Promise<AnswerView> => {
     if (USE_MOCKS) {
-      return Promise.resolve(MOCK_REFUSAL_PATTERN.test(question) ? MOCK_REFUSAL : MOCK_ANSWER);
+      if (MOCK_REFUSAL_PATTERN.test(question)) return Promise.resolve(MOCK_REFUSAL);
+      if (MOCK_GRADED_PATTERN.test(question)) return Promise.resolve(MOCK_GRADED_ANSWER);
+      return Promise.resolve(MOCK_ANSWER);
     }
     return post(
       "/chat",

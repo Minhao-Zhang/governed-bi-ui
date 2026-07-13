@@ -44,8 +44,15 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { QueryState } from "@/components/common/query-state";
 import { useFocusContext } from "@/components/schema/use-focus-context";
-import { useErGraph, useSchema } from "@/hooks/queries";
+import { useCapabilities, useCatalog, useErGraph, useSchema } from "@/hooks/queries";
+import { canScope } from "@/lib/capabilities";
 import { layoutGraph, type LayoutEdge, type LayoutNode } from "@/lib/graph-layout";
+import {
+  annotateNodeSchemas,
+  applyErGraphScope,
+  DEFAULT_ER_BUDGET,
+  withDefaultBudget,
+} from "@/lib/graph-scope";
 import type {
   BoundaryEdge,
   ColumnView,
@@ -62,8 +69,8 @@ const ROW_H = 26;
 const PAD_Y = 6;
 const EDGE_STROKE = "#94a3b8";
 const LOW_STROKE = "#c0392b";
-/** Fallback node budget for the "expand" banner (mirrors the engine default). */
-const DEFAULT_BUDGET = 60;
+/** Fallback node budget for the "expand" banner (mirrors the graph-scope default). */
+const DEFAULT_BUDGET = DEFAULT_ER_BUDGET;
 const BUDGET_STEP = 50;
 
 const cardHeight = (t: TableView) => HEADER_H + t.columns.length * ROW_H + PAD_Y * 2;
@@ -182,16 +189,20 @@ function parseSide(s: string | undefined): { table: string; col: string } | null
   return parts.length === 2 ? { table: parts[0].trim(), col: parts[1].trim() } : null;
 }
 
-/** Resolve each edge endpoint to a column on the participating node, by matching
- * physical names in `on` to node ids. `byPhysical` (physical_name → node id) is
- * built ONCE per layout pass and threaded in — the map is O(N), so rebuilding it
- * inside every edge would be O(E·N). Returns null for a side we can't resolve. */
-function resolveEndpoints(byPhysical: Map<string, string>, edge: ErGraphEdge) {
+/** Resolve each edge endpoint to a column on the participating node.
+ * Match `on` table names against the edge's own source/target nodes only —
+ * never a global physical_name map (duplicate names across namespaces collide). */
+function resolveEndpoints(
+  nodesById: Map<string, { physical_name: string }>,
+  edge: ErGraphEdge,
+) {
   const [lhs, rhs] = edge.on.split("=");
   const sides = [parseSide(lhs), parseSide(rhs)];
   const colFor = (nodeId: string): string | null => {
+    const node = nodesById.get(nodeId);
+    if (!node) return null;
     for (const side of sides) {
-      if (side && byPhysical.get(side.table) === nodeId) return side.col;
+      if (side && side.table === node.physical_name) return side.col;
     }
     return null;
   };
@@ -201,10 +212,21 @@ function resolveEndpoints(byPhysical: Map<string, string>, edge: ErGraphEdge) {
 /* ── View ─────────────────────────────────────────────────────────────────── */
 
 export function ErDiagram({ scope, onScopeChange, onSelect }: GraphViewProps) {
-  // /schema is the per-column source (card bodies + handles); /graph (scoped) is
-  // the authoritative in-scope table + FK set plus meta/boundary.
-  const schema = useSchema();
+  // /graph is the authoritative in-scope table + FK set; /schema supplies column
+  // bodies. When can_scope, prefer `?schema=`-filtered /schema for the active
+  // namespace so we don't pull the whole corpus for every rail click.
+  const { data: caps } = useCapabilities();
+  const scoped = canScope(caps);
   const er = useErGraph(scope);
+  const { items: catalog } = useCatalog();
+  const full = useSchema({ enabled: !scoped || !scope?.schema });
+  const namespaced = useSchema({
+    enabled: scoped && !!scope?.schema,
+    schema: scope?.schema,
+  });
+  const tableDump = scoped && scope?.schema ? (namespaced.data ?? []) : (full.data ?? []);
+  const schemaLoading =
+    scoped && scope?.schema ? namespaced.isLoading : full.isLoading;
 
   return (
     <QueryState
@@ -216,7 +238,9 @@ export function ErDiagram({ scope, onScopeChange, onSelect }: GraphViewProps) {
       {(graph) => (
         <ErCanvas
           graph={graph}
-          tableDump={schema.data ?? []}
+          tableDump={tableDump}
+          catalog={catalog}
+          schemaLoading={schemaLoading}
           scope={scope}
           onScopeChange={onScopeChange}
           onSelect={onSelect}
@@ -229,13 +253,17 @@ export function ErDiagram({ scope, onScopeChange, onSelect }: GraphViewProps) {
 function ErCanvas({
   graph,
   tableDump,
+  catalog,
+  schemaLoading,
   scope,
   onScopeChange,
   onSelect,
 }: {
   graph: ErGraph;
-  /** Full /schema dump — the per-column detail source for card bodies/handles. */
+  /** Column-detail source for card bodies/handles (full dump or ?schema=-filtered). */
   tableDump: TableView[];
+  catalog: { id: string; namespace: string }[];
+  schemaLoading: boolean;
   scope?: SchemaScope;
   onScopeChange?: (next: SchemaScope) => void;
   onSelect: (selection: GraphSelection) => void;
@@ -245,13 +273,26 @@ function ErCanvas({
     // without a matching TableView (schema still loading, or an unlisted table)
     // is skipped rather than fabricated.
     const dumpById = new Map(tableDump.map((t) => [t.id, t]));
-    const tables: TableView[] = graph.nodes
+    // Prefer catalog namespaces (lean summary); fall back to dump.schema.
+    const namespaceById = new Map<string, string>([
+      ...tableDump.map((t) => [t.id, t.schema] as const),
+      ...catalog.map((it) => [it.id, it.namespace] as const),
+    ]);
+    const effectiveScope = withDefaultBudget(scope, DEFAULT_ER_BUDGET);
+    const scopedGraph = applyErGraphScope(
+      {
+        ...graph,
+        nodes: annotateNodeSchemas(graph.nodes, namespaceById),
+      },
+      effectiveScope,
+    );
+
+    const tables: TableView[] = scopedGraph.nodes
       .map((n) => dumpById.get(n.id))
       .filter((t): t is TableView => t !== undefined);
 
     const byId = new Map(tables.map((t) => [t.id, t]));
-    // Hoisted once: physical_name → node id, reused by every edge (avoids O(E·N)).
-    const byPhysical = new Map(graph.nodes.map((n) => [n.physical_name, n.id]));
+    const nodesById = new Map(scopedGraph.nodes.map((n) => [n.id, n]));
 
     const layoutNodes: LayoutNode[] = tables.map((t) => ({
       id: t.id,
@@ -260,7 +301,7 @@ function ErCanvas({
     }));
     // Only edges whose endpoints both have a rendered card (defensive: keeps
     // React Flow from referencing a missing node).
-    const scopedEdges = graph.edges.filter((e) => byId.has(e.source) && byId.has(e.target));
+    const scopedEdges = scopedGraph.edges.filter((e) => byId.has(e.source) && byId.has(e.target));
     const layoutEdges: LayoutEdge[] = scopedEdges.map((e) => ({ source: e.source, target: e.target }));
     const pos = layoutGraph(layoutNodes, layoutEdges, { direction: "LR", rankSep: 140 });
 
@@ -275,7 +316,7 @@ function ErCanvas({
     }));
 
     const edges: Edge[] = scopedEdges.map((e) => {
-      const { srcCol, tgtCol } = resolveEndpoints(byPhysical, e);
+      const { srcCol, tgtCol } = resolveEndpoints(nodesById, e);
       const srcHasCol = srcCol && byId.get(e.source)?.columns.some((c) => c.physical_name === srcCol);
       const tgtHasCol = tgtCol && byId.get(e.target)?.columns.some((c) => c.physical_name === tgtCol);
       const low = e.low_confidence;
@@ -298,8 +339,8 @@ function ErCanvas({
       } satisfies Edge;
     });
 
-    return { nodes, edges };
-  }, [graph, tableDump]);
+    return { nodes, edges, boundary: scopedGraph.boundary ?? [], meta: scopedGraph.meta };
+  }, [graph, tableDump, catalog, scope]);
 
   const [nodes, setNodes, onNodesChange] = useNodesState<ErFlowNode>(computed.nodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>(computed.edges);
@@ -336,9 +377,9 @@ function ErCanvas({
     [edges, dimEdge],
   );
 
-  const meta = graph.meta;
+  const meta = computed.meta;
   const hiddenCount = meta ? meta.total_nodes - meta.returned_nodes : 0;
-  const boundary = graph.boundary ?? [];
+  const boundary = computed.boundary;
 
   const expandBudget = () =>
     onScopeChange?.({ ...scope, nodeBudget: (scope?.nodeBudget ?? DEFAULT_BUDGET) + BUDGET_STEP });
@@ -349,6 +390,12 @@ function ErCanvas({
     onScopeChange?.({ schema: b.other_schema, focus: b.other_table_id });
     onSelect({ id: b.other_table_id, kind: "table", label: b.other_label });
   };
+
+  // While column dump is still loading for the active scope, prefer a skeleton
+  // over an empty canvas of nodes that couldn't join yet.
+  if (schemaLoading && computed.nodes.length === 0) {
+    return <Skeleton className="h-[70vh] w-full" />;
+  }
 
   return (
     <div className="h-[70vh] w-full rounded-md border bg-card">
