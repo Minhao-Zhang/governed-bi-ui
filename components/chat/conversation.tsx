@@ -19,6 +19,8 @@ export function Conversation({
   send,
   isRunning,
   activeStage,
+  steps,
+  servePath,
   banner,
 }: ChatTransport & { banner?: React.ReactNode }) {
   const isEmpty = messages.length === 0 && !isRunning;
@@ -33,7 +35,13 @@ export function Conversation({
           </div>
         ) : (
           <div className="mx-auto w-full max-w-3xl">
-            <MessageList messages={messages} isRunning={isRunning} activeStage={activeStage} />
+            <MessageList
+              messages={messages}
+              isRunning={isRunning}
+              activeStage={activeStage}
+              steps={steps}
+              servePath={servePath}
+            />
           </div>
         )}
       </div>

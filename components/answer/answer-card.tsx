@@ -5,11 +5,13 @@ import { ReliabilityStamp } from "@/components/answer/reliability-stamp";
 import { ResultTable } from "@/components/answer/result-table";
 import { SqlBlock } from "@/components/answer/sql-block";
 import { ProvenanceDrawer } from "@/components/answer/provenance-drawer";
+import { AgentTimeline } from "@/components/chat/agent-timeline";
 import {
   deriveDelivery,
   routedSchemasLabel,
   whyLines,
 } from "@/lib/answer-delivery";
+import { buildStepsFromLedger, type TimelineStep } from "@/lib/steps";
 import { cn } from "@/lib/utils";
 import type { AnswerView } from "@/lib/types";
 
@@ -18,11 +20,15 @@ import type { AnswerView } from "@/lib/types";
  * clean, graded delivery (SQL + result with reliability warning), or hard refusal.
  * Branch on `deriveDelivery` — never on `tier === "refused"` alone.
  */
-export function AnswerCard({ answer }: { answer: AnswerView }) {
+export function AnswerCard({ answer, steps }: { answer: AnswerView; steps?: TimelineStep[] }) {
   const delivery = deriveDelivery(answer);
   const why = whyLines(answer.provenance);
   const schemasNote = routedSchemasLabel(answer.provenance);
   const heuristic = answer.semantic_assurance === "heuristic";
+  // The governed trace, kept on the finished answer so it doesn't vanish: the
+  // captured live trace if present, else rebuilt from the ledger (live == audit).
+  const timeline =
+    steps && steps.length > 0 ? steps : buildStepsFromLedger(answer.provenance.governance_ledger);
 
   return (
     <Card
@@ -90,6 +96,14 @@ export function AnswerCard({ answer }: { answer: AnswerView }) {
               <ProvenanceDrawer provenance={answer.provenance} />
             </div>
           </>
+        )}
+
+        {/* The governed step trace, persisted on the finished answer. Collapses
+            to a one-line summary; re-expands into the full audit. */}
+        {timeline.length > 0 && (
+          <div className="border-t pt-3">
+            <AgentTimeline steps={timeline} isRunning={false} />
+          </div>
         )}
       </CardContent>
     </Card>

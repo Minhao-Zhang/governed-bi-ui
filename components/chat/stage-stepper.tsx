@@ -48,7 +48,7 @@ export function StageStepper({ activeStage }: { activeStage: StageId | null }) {
   );
 }
 
-function StageIcon({ state }: { state: StepState }) {
+export function StageIcon({ state }: { state: StepState }) {
   if (state === "done") {
     // Completed — green check keeps color meaning trust level.
     return <Check className="size-4 shrink-0 text-tier-governed" aria-hidden />;

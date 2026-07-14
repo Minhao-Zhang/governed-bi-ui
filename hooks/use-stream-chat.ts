@@ -22,7 +22,8 @@ import type { ChatMessage, ChatTransport } from "@/hooks/use-chat";
 import { useRestChat } from "@/hooks/use-rest-chat";
 import { ASSISTANT_ID, LANGGRAPH_URL } from "@/lib/env";
 import { answerViewSchema } from "@/lib/schemas";
-import { nodeToStage, STAGE_IDS, type StageId } from "@/lib/stages";
+import { nodeToStage, type StageId } from "@/lib/stages";
+import { buildStepsFromLedger, reduceSteps, type GovEvent, type TimelineStep } from "@/lib/steps";
 import type { AnswerView } from "@/lib/types";
 
 /**
@@ -64,6 +65,17 @@ function parseAnswer(raw: unknown): AnswerView | null {
 
 export function useStreamChat(): ChatTransport {
   const [activeStage, setActiveStage] = useState<StageId | null>(null);
+  // Agent-path live timeline, folded from the custom `GovEvent` stream.
+  const [steps, setSteps] = useState<TimelineStep[]>([]);
+  const [servePath, setServePath] = useState<"flow" | "agent" | null>(null);
+  // Completed traces, kept by assistant-message id so each finished turn keeps
+  // its timeline after the run ends (the live `steps` state resets next send).
+  // State, not a ref, so the mapping below can read it during render.
+  const [completedSteps, setCompletedSteps] = useState<Map<string, TimelineStep[]>>(new Map());
+  // Latest live trace, mirrored in a ref so the `onFinish` event handler can read
+  // it (event handlers may touch refs; render may not) to snapshot the finished
+  // turn's timeline — no ref reads during render, no setState inside an effect.
+  const stepsRef = useRef<TimelineStep[]>([]);
 
   // Graceful degradation: if the streaming run errors (e.g. the LangGraph server
   // can't execute the graph), fall back to the non-streaming POST /chat transport
@@ -79,8 +91,37 @@ export function useStreamChat(): ChatTransport {
     assistantId: ASSISTANT_ID,
     messagesKey: "messages",
     onCustomEvent: (data) => {
-      const stage = (data as { stage?: unknown } | null | undefined)?.stage;
-      if (typeof stage === "string") setActiveStage(nodeToStage(stage));
+      // Two event shapes ride the same custom channel:
+      //  • the governance `GovEvent` (agent path) — has `kind` + numeric `seq`;
+      //  • the legacy `{ stage }` event (flow path) — drives the fixed stepper.
+      const ev = data as (Partial<GovEvent> & { stage?: unknown }) | null | undefined;
+      if (ev?.serve_path) setServePath(ev.serve_path);
+      if (typeof ev?.kind === "string" && typeof ev.seq === "number") {
+        const next = reduceSteps(stepsRef.current, ev as GovEvent);
+        stepsRef.current = next;
+        setSteps(next);
+        // Keep the fixed stepper coherent too, for rails that map to a stage.
+        if (ev.kind === "rail" && typeof ev.step === "string") {
+          const mapped = nodeToStage(ev.step);
+          if (mapped) setActiveStage(mapped);
+        }
+      } else if (typeof ev?.stage === "string") {
+        setActiveStage(nodeToStage(ev.stage));
+      }
+    },
+    onFinish: (state) => {
+      // Run finished: snapshot the live trace under the completed assistant
+      // message's id so its timeline persists after the answer lands.
+      const captured = stepsRef.current;
+      if (captured.length === 0) return;
+      const msgs = (state?.values as ChatStreamState | undefined)?.messages ?? [];
+      for (let i = msgs.length - 1; i >= 0; i--) {
+        if (msgs[i]?.type !== "human") {
+          const id = msgs[i]?.id ?? `stream-${i}`;
+          setCompletedSteps((prev) => new Map(prev).set(id, captured));
+          break;
+        }
+      }
     },
     onError: () => {
       if (degradedRef.current) return;
@@ -92,6 +133,7 @@ export function useStreamChat(): ChatTransport {
   });
 
   const isRunning = stream.isLoading;
+
   // Channel answer (handoff §3) — used for the latest assistant turn when present.
   const channelAnswer = parseAnswer(stream.values?.answer);
 
@@ -102,6 +144,15 @@ export function useStreamChat(): ChatTransport {
       break;
     }
   }
+
+  // The persistent trace for a finished assistant turn: the captured live trace
+  // if we have it, else rebuilt from the answer's ledger (live == audit).
+  const stepsFor = (id: string, answer: AnswerView): TimelineStep[] | undefined => {
+    const captured = completedSteps.get(id);
+    if (captured && captured.length > 0) return captured;
+    const fromLedger = buildStepsFromLedger(answer.provenance?.governance_ledger);
+    return fromLedger.length > 0 ? fromLedger : undefined;
+  };
 
   const messages: ChatMessage[] = stream.messages
     .map((message, index): ChatMessage | null => {
@@ -114,13 +165,13 @@ export function useStreamChat(): ChatTransport {
       // Prefer the graph-state answer channel on the latest assistant message
       // once the run finishes; fall back to per-message stamps / streamed text.
       if (index === lastAssistantIndex && channelAnswer && !isRunning) {
-        return { id, role: "assistant", answer: channelAnswer };
+        return { id, role: "assistant", answer: channelAnswer, steps: stepsFor(id, channelAnswer) };
       }
 
       const governed = message.additional_kwargs?.governed_bi;
       if (governed != null) {
         const parsed = parseAnswer(governed);
-        if (parsed) return { id, role: "assistant", answer: parsed };
+        if (parsed) return { id, role: "assistant", answer: parsed, steps: stepsFor(id, parsed) };
       }
 
       const text = flattenContent(message.content);
@@ -141,6 +192,7 @@ export function useStreamChat(): ChatTransport {
       id: "channel-answer",
       role: "assistant",
       answer: channelAnswer,
+      steps: stepsFor("channel-answer", channelAnswer),
     });
   }
 
@@ -152,7 +204,14 @@ export function useStreamChat(): ChatTransport {
     const trimmed = question.trim();
     if (!trimmed || isRunning) return;
     pendingRef.current = trimmed;
-    setActiveStage(STAGE_IDS[0] ?? null);
+    // Don't assume a path yet: leave activeStage null until the first event
+    // reveals flow (a stage event) vs. agent (a GovEvent). Seeding "Routing"
+    // here flashed the fixed stepper before the agent timeline took over.
+    setActiveStage(null);
+    // Reset the agent timeline for the new turn; the first event re-picks the path.
+    stepsRef.current = [];
+    setSteps([]);
+    setServePath(null);
     void stream.submit(
       { messages: [{ type: "human", content: trimmed }] },
       { streamMode: ["values", "messages", "custom"] },
@@ -166,7 +225,11 @@ export function useStreamChat(): ChatTransport {
     messages,
     send,
     isRunning,
-    // Stage events only mean anything mid-run; clear the stepper when idle.
+    // Progress state only means anything mid-run; clear it when idle. (The
+    // completed trace re-renders from `governance_ledger` in the provenance
+    // drawer, so nothing is lost.)
     activeStage: isRunning ? activeStage : null,
+    steps: isRunning ? steps : [],
+    servePath: isRunning ? servePath : null,
   };
 }

@@ -12,6 +12,7 @@
  * field, a low-confidence join, and a refusal.
  */
 
+import type { GovEvent } from "@/lib/steps";
 import type {
   AnswerView,
   AssetRow,
@@ -491,6 +492,139 @@ export const MOCK_GRADED_ANSWER: AnswerView = {
     ],
     row_count: 2,
     truncated: false,
+  },
+};
+
+/* ── Agent path: a scripted governance trajectory + its answer (§ agent step viz) ─
+ * A faithful offline stand-in for a `serve_path: "agent"` run: assemble → search
+ * → inspect → run_query (blocked by term_semantics) → run_query (ok) → finalize.
+ * Replayed by `useChat` through `reduceSteps`; the resolved tool events equal the
+ * `governance_ledger` on MOCK_AGENT_ANSWER below (live == audit). */
+
+const AGENT_BLOCKED_SQL =
+  "SELECT d.name AS category, SUM(b.restricted_field) AS total\nFROM table_b b\nJOIN table_d d ON d.b_id = b.id\nGROUP BY d.name;";
+
+const AGENT_OK_SQL =
+  "SELECT d.name AS category, SUM(b.amount) AS total\nFROM table_b b\nJOIN table_a a ON b.a_id = a.id\nJOIN table_d d ON d.b_id = b.id\nGROUP BY d.name\nORDER BY total DESC\nLIMIT 5;";
+
+export const MOCK_AGENT_EVENTS: GovEvent[] = [
+  {
+    seq: 0,
+    kind: "rail",
+    step: "assemble",
+    status: "ok",
+    serve_path: "agent",
+    detail: { schema: "sales", tables: 6, few_shots: 3 },
+  },
+  { seq: 1, id: "t1", kind: "tool", step: "search_corpus", status: "start" },
+  {
+    seq: 2,
+    id: "t1",
+    kind: "tool",
+    step: "search_corpus",
+    status: "ok",
+    detail: { query: "total amount by category", tables: 4, few_shots: 2, metrics: 1 },
+  },
+  { seq: 3, id: "t2", kind: "tool", step: "inspect_schema", status: "start", detail: { table_id: "table_b" } },
+  {
+    seq: 4,
+    id: "t2",
+    kind: "tool",
+    step: "inspect_schema",
+    status: "ok",
+    detail: { table_id: "table_b", columns: 4, licensed: true },
+  },
+  { seq: 5, id: "t3", kind: "tool", step: "run_query", status: "start", detail: { attempt: 1 } },
+  {
+    seq: 6,
+    id: "t3",
+    kind: "tool",
+    step: "run_query",
+    status: "blocked",
+    detail: {
+      attempt: 1,
+      sql: AGENT_BLOCKED_SQL,
+      verdict: "blocked",
+      layer: "term_semantics",
+      reason: "Referenced restricted_field, which is excluded from the served surface.",
+      allowed: ["table_a", "table_b", "table_d"],
+    },
+  },
+  { seq: 7, id: "t4", kind: "tool", step: "run_query", status: "start", detail: { attempt: 2 } },
+  {
+    seq: 8,
+    id: "t4",
+    kind: "tool",
+    step: "run_query",
+    status: "ok",
+    detail: { attempt: 2, sql: AGENT_OK_SQL, verdict: "allowed", rows: 4 },
+  },
+  {
+    seq: 9,
+    kind: "final",
+    step: "finalize",
+    status: "ok",
+    detail: {
+      tier: "governed",
+      semantic_assurance: "heuristic",
+      safety_clearance: true,
+      tables_used: ["table_b", "table_a", "table_d"],
+      min_join_confidence: 0.92,
+      coverage_best_effort: true,
+    },
+  },
+];
+
+/** The governance ledger the agent run lands on `provenance.governance_ledger`;
+ * `buildStepsFromLedger` turns this back into the same rows the live run showed. */
+const MOCK_GOVERNANCE_LEDGER = [
+  { action: "search_corpus", verdict: "ok", tables: 4, few_shots: 2, metrics: 1 },
+  { action: "inspect_schema", verdict: "ok", table_id: "table_b", columns: 4, licensed: true, allowed: true },
+  {
+    action: "run_query",
+    attempt: 1,
+    allowed: false,
+    verdict: "blocked",
+    layer: "term_semantics",
+    reason: "Referenced restricted_field, which is excluded from the served surface.",
+    sql: AGENT_BLOCKED_SQL,
+  },
+  { action: "run_query", attempt: 2, allowed: true, verdict: "allowed", sql: AGENT_OK_SQL, result: { rows: 4 } },
+  { action: "finalize", status: "ok", tier: "governed", semantic_assurance: "heuristic" },
+];
+
+export const MOCK_AGENT_ANSWER: AnswerView = {
+  tier: "governed",
+  safety_clearance: true,
+  semantic_assurance: "heuristic",
+  text: "Placeholder agent answer: returned 4 grouped rows after one guardrail repair. (Synthetic — no backend attached.)",
+  sql: AGENT_OK_SQL,
+  escalation: null,
+  provenance: {
+    route: "metric",
+    bound_terms: ["total"],
+    metric_id: "metric_total",
+    tables_used: ["table_b", "table_a", "table_d"],
+    join_ids: ["join_b_a", "join_d_b"],
+    min_join_confidence: 0.92,
+    attempts: 2,
+    uncertainty_flags: ["repaired"],
+    routed_schemas: ["sales", "billing"],
+    cache_hit: false,
+    governance_ledger: MOCK_GOVERNANCE_LEDGER,
+    session_id: "mock-session",
+    user: "demo",
+  },
+  result: {
+    columns: ["category", "total"],
+    rows: [
+      ["category_1", 1840.5],
+      ["category_2", 1510.0],
+      ["category_3", 1329.25],
+      ["category_4", 981.75],
+    ],
+    row_count: 40,
+    truncated: true,
   },
 };
 

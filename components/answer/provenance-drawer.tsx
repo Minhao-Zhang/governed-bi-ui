@@ -2,6 +2,7 @@
 
 import { FileSearch } from "lucide-react";
 
+import { AgentTimeline } from "@/components/chat/agent-timeline";
 import { Button } from "@/components/ui/button";
 import {
   Sheet,
@@ -11,6 +12,7 @@ import {
   SheetTitle,
   SheetTrigger,
 } from "@/components/ui/sheet";
+import { buildStepsFromLedger } from "@/lib/steps";
 
 /** The per-answer audit surface: the full provenance trace as key/value rows.
  * Ordered so the fields a reviewer reads first come first. */
@@ -35,8 +37,11 @@ const PREFERRED_ORDER = [
   "negative_example",
 ];
 
+// Rendered as the dedicated "Steps" section, not as a raw key/value blob.
+const HIDDEN_KEYS = new Set(["governance_ledger"]);
+
 function orderedEntries(provenance: Record<string, unknown>): [string, unknown][] {
-  const keys = Object.keys(provenance);
+  const keys = Object.keys(provenance).filter((k) => !HIDDEN_KEYS.has(k));
   const preferred = PREFERRED_ORDER.filter((k) => k in provenance);
   const rest = keys.filter((k) => !PREFERRED_ORDER.includes(k)).sort();
   return [...preferred, ...rest].map((k) => [k, provenance[k]]);
@@ -51,6 +56,9 @@ function renderValue(value: unknown): string {
 
 export function ProvenanceDrawer({ provenance }: { provenance: Record<string, unknown> }) {
   const entries = orderedEntries(provenance);
+  // The governed loop, replayed from the ledger with the SAME rows the live run
+  // showed — one audit surface (§ agent-step-visualization).
+  const ledgerSteps = buildStepsFromLedger(provenance.governance_ledger);
 
   return (
     <Sheet>
@@ -65,6 +73,12 @@ export function ProvenanceDrawer({ provenance }: { provenance: Record<string, un
           <SheetTitle>Provenance</SheetTitle>
           <SheetDescription>The audit trace for this answer.</SheetDescription>
         </SheetHeader>
+        {ledgerSteps.length > 0 && (
+          <section className="border-b px-4 pb-4">
+            <h3 className="mb-2 text-xs font-medium text-muted-foreground">Steps</h3>
+            <AgentTimeline steps={ledgerSteps} isRunning={false} title="Governed steps" />
+          </section>
+        )}
         <dl className="grid gap-3 px-4 pb-6">
           {entries.map(([key, value]) => (
             <div key={key} className="grid grid-cols-[9rem_1fr] gap-2 border-b pb-2 text-sm">

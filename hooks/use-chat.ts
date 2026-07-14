@@ -23,8 +23,15 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { MOCK_ANSWER, MOCK_GRADED_ANSWER, MOCK_REFUSAL } from "@/lib/mock/fixtures";
+import {
+  MOCK_AGENT_ANSWER,
+  MOCK_AGENT_EVENTS,
+  MOCK_ANSWER,
+  MOCK_GRADED_ANSWER,
+  MOCK_REFUSAL,
+} from "@/lib/mock/fixtures";
 import { STAGE_IDS, type StageId } from "@/lib/stages";
+import { reduceSteps, type TimelineStep } from "@/lib/steps";
 import type { AnswerView } from "@/lib/types";
 
 export type ChatRole = "user" | "assistant";
@@ -35,6 +42,9 @@ export interface ChatMessage {
   role: ChatRole;
   text?: string;
   answer?: AnswerView;
+  /** Agent-path trace captured live, kept on the finished turn so the timeline
+   * persists after the answer lands (falls back to `governance_ledger`). */
+  steps?: TimelineStep[];
 }
 
 /**
@@ -47,6 +57,11 @@ export interface ChatTransport {
   send: (question: string) => void;
   isRunning: boolean;
   activeStage: StageId | null;
+  /** Agent-path live timeline (§ agent-step-visualization); optional so the
+   * rest transport can omit it and the renderer falls back to the stepper. */
+  steps?: TimelineStep[];
+  /** Which serve path the current turn took; picks the progress renderer. */
+  servePath?: "flow" | "agent" | null;
 }
 
 export interface UseChatResult extends ChatTransport {
@@ -62,9 +77,22 @@ const REFUSAL_PATTERN = /restrict|exclud|pii|card|secret|password/i;
 /** Questions matching this route to a graded-delivery fixture (§13). */
 const GRADED_PATTERN = /graded|unverified|fenced/i;
 
+/**
+ * Questions matching this replay the agent path (live tool timeline + repair
+ * loop) instead of the fixed stepper — a faithful offline stand-in for the
+ * `serve_path: "agent"` runs (§ agent-step-visualization).
+ */
+const AGENT_PATTERN = /agent|reason|corpus|repair|inspect|step/i;
+
+/** Refusal takes priority; the agent replay only fires for non-refused questions. */
+function isAgentQuestion(question: string): boolean {
+  return AGENT_PATTERN.test(question) && !REFUSAL_PATTERN.test(question);
+}
+
 function mockAnswerFor(question: string): AnswerView {
   if (REFUSAL_PATTERN.test(question)) return MOCK_REFUSAL;
   if (GRADED_PATTERN.test(question)) return MOCK_GRADED_ANSWER;
+  if (isAgentQuestion(question)) return MOCK_AGENT_ANSWER;
   return MOCK_ANSWER;
 }
 
@@ -87,6 +115,8 @@ export function useChat(): UseChatResult {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isRunning, setIsRunning] = useState(false);
   const [activeStage, setActiveStage] = useState<StageId | null>(null);
+  const [steps, setSteps] = useState<TimelineStep[]>([]);
+  const [servePath, setServePath] = useState<"flow" | "agent" | null>(null);
 
   // Holds the running stage interval so we can tear it down on reset / unmount.
   const timerRef = useRef<number | null>(null);
@@ -109,12 +139,44 @@ export function useChat(): UseChatResult {
       // 1) Push the user's turn immediately.
       setMessages((prev) => [...prev, { id: nextId(), role: "user", text: trimmed }]);
 
-      // 2) Enter the running state at the first stage.
+      // 2) Enter the running state; reset both progress views.
       setIsRunning(true);
-      setActiveStage(STAGE_IDS[0] ?? null);
-
-      // 3) Advance through the remaining stages, then emit the assistant answer.
+      setSteps([]);
       clearTimer();
+
+      const resolve = (answer: AnswerView, finalSteps?: TimelineStep[]) => {
+        clearTimer();
+        setMessages((prev) => [
+          ...prev,
+          { id: nextId(), role: "assistant", answer, steps: finalSteps },
+        ]);
+        setIsRunning(false);
+        setActiveStage(null);
+      };
+
+      // 3a) Agent path: replay the scripted governance trajectory as a live
+      // timeline, folding each event through the same reducer the stream uses.
+      if (isAgentQuestion(trimmed)) {
+        setServePath("agent");
+        setActiveStage(null);
+        let acc: TimelineStep[] = [];
+        let evIndex = 0;
+        timerRef.current = window.setInterval(() => {
+          if (evIndex < MOCK_AGENT_EVENTS.length) {
+            acc = reduceSteps(acc, MOCK_AGENT_EVENTS[evIndex]);
+            setSteps(acc);
+            evIndex += 1;
+            return;
+          }
+          // Keep the completed trace on the finished turn so it doesn't vanish.
+          resolve(mockAnswerFor(trimmed), acc);
+        }, STAGE_INTERVAL_MS);
+        return;
+      }
+
+      // 3b) Flow path: walk the fixed stepper, then emit the assistant answer.
+      setServePath("flow");
+      setActiveStage(STAGE_IDS[0] ?? null);
       let stageIndex = 0;
       timerRef.current = window.setInterval(() => {
         stageIndex += 1;
@@ -125,11 +187,7 @@ export function useChat(): UseChatResult {
         }
 
         // Final stage completed → resolve and stop the pipeline.
-        clearTimer();
-        const answer = mockAnswerFor(trimmed);
-        setMessages((prev) => [...prev, { id: nextId(), role: "assistant", answer }]);
-        setIsRunning(false);
-        setActiveStage(null);
+        resolve(mockAnswerFor(trimmed));
       }, STAGE_INTERVAL_MS);
     },
     [clearTimer, isRunning],
@@ -140,7 +198,18 @@ export function useChat(): UseChatResult {
     setMessages([]);
     setIsRunning(false);
     setActiveStage(null);
+    setSteps([]);
+    setServePath(null);
   }, [clearTimer]);
 
-  return { messages, send, isRunning, activeStage, reset };
+  return {
+    messages,
+    send,
+    isRunning,
+    activeStage,
+    // Mirror `activeStage`: progress state only means anything mid-run.
+    steps: isRunning ? steps : [],
+    servePath: isRunning ? servePath : null,
+    reset,
+  };
 }

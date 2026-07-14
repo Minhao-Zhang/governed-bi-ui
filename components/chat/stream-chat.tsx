@@ -8,9 +8,16 @@ import { useStreamChat } from "@/hooks/use-stream-chat";
  * only when the backend reports `can_stream: true`.
  */
 export function StreamChat() {
-  const { messages, send, isRunning, activeStage } = useStreamChat();
+  const { messages, send, isRunning, activeStage, steps, servePath } = useStreamChat();
 
   return (
-    <Conversation messages={messages} send={send} isRunning={isRunning} activeStage={activeStage} />
+    <Conversation
+      messages={messages}
+      send={send}
+      isRunning={isRunning}
+      activeStage={activeStage}
+      steps={steps}
+      servePath={servePath}
+    />
   );
 }
