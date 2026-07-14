@@ -8,9 +8,12 @@
  * confidence carried on the selection itself.
  */
 
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
+import { ChevronLeft, ChevronRight } from "lucide-react";
 
 import { cn } from "@/lib/utils";
+import { deriveColumnId } from "@/lib/columns";
+import { ColumnRelatedPanel } from "@/components/schema/column-related";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -50,11 +53,34 @@ function Field({ label, value }: { label: string; value: ReactNode }) {
   );
 }
 
-function ColumnRow({ column }: { column: ColumnView }) {
+function ColumnRow({
+  column,
+  onSelect,
+}: {
+  column: ColumnView;
+  onSelect: () => void;
+}) {
   const suspect = column.reliability === "suspect";
   return (
-    <TableRow className={cn(column.excluded && "opacity-60")}>
-      <TableCell className="font-mono text-xs">{column.physical_name}</TableCell>
+    <TableRow
+      className={cn("cursor-pointer hover:bg-muted/50", column.excluded && "opacity-60")}
+      onClick={onSelect}
+      role="button"
+      tabIndex={0}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onSelect();
+        }
+      }}
+    >
+      <TableCell className="font-mono text-xs">
+        <span className="flex items-center gap-1">
+          {/* right chevron = drill into this column's semantic-layer links */}
+          <ChevronRight className="size-3 shrink-0 text-muted-foreground" aria-hidden />
+          {column.physical_name}
+        </span>
+      </TableCell>
       <TableCell className="font-mono text-xs text-muted-foreground">
         {column.logical_type || column.physical_type}
       </TableCell>
@@ -94,6 +120,35 @@ function ColumnRow({ column }: { column: ColumnView }) {
 }
 
 function TableDetail({ table }: { table: TableView }) {
+  // Which column is drilled into (by physical name); null = the columns table.
+  const [openColumn, setOpenColumn] = useState<string | null>(null);
+
+  // Drill-down: a focused column view with a breadcrumb back to the table. Gives
+  // the semantic-layer links the full sheet height instead of cramping them below
+  // a long columns table.
+  if (openColumn) {
+    return (
+      <div className="space-y-4 px-4 pb-8">
+        <button
+          type="button"
+          onClick={() => setOpenColumn(null)}
+          className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground"
+        >
+          <ChevronLeft className="size-4 shrink-0" aria-hidden />
+          <span className="font-mono text-foreground">{table.physical_name}</span>
+          <span aria-hidden>›</span>
+          <span className="font-mono text-foreground">{openColumn}</span>
+        </button>
+        <div className="text-xs font-medium text-muted-foreground">Semantic-layer links</div>
+        <ColumnRelatedPanel
+          columnId={deriveColumnId(table.id, openColumn)}
+          physicalName={openColumn}
+          bare
+        />
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-4 px-4 pb-8">
       <div className="flex flex-wrap items-center gap-2">
@@ -127,7 +182,8 @@ function TableDetail({ table }: { table: TableView }) {
 
       <div>
         <div className="mb-1 text-xs font-medium text-muted-foreground">
-          Columns ({table.columns.length})
+          Columns ({table.columns.length}) —{" "}
+          <span className="font-normal">select one to see its semantic-layer links</span>
         </div>
         <div className="rounded-md border">
           <Table>
@@ -143,7 +199,11 @@ function TableDetail({ table }: { table: TableView }) {
             </TableHeader>
             <TableBody>
               {table.columns.map((col) => (
-                <ColumnRow key={col.physical_name} column={col} />
+                <ColumnRow
+                  key={col.physical_name}
+                  column={col}
+                  onSelect={() => setOpenColumn(col.physical_name)}
+                />
               ))}
             </TableBody>
           </Table>

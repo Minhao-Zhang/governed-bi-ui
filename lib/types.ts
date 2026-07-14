@@ -10,6 +10,7 @@ import type {
   assetRowSchema,
   boundaryEdgeSchema,
   capabilitiesSchema,
+  columnRelatedResponseSchema,
   columnViewSchema,
   corpusHealthSchema,
   editResponseSchema,
@@ -48,6 +49,7 @@ export type ErGraphEdge = z.infer<typeof erGraphEdgeSchema>;
 export type ErGraph = z.infer<typeof erGraphSchema>;
 export type AssetRow = z.infer<typeof assetRowSchema>;
 export type SkillView = z.infer<typeof skillViewSchema>;
+export type ColumnRelated = z.infer<typeof columnRelatedResponseSchema>;
 export type ResultTable = z.infer<typeof resultTableSchema>;
 export type AnswerView = z.infer<typeof answerViewSchema>;
 export type EditResponse = z.infer<typeof editResponseSchema>;

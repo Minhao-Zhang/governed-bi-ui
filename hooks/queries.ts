@@ -154,6 +154,21 @@ export function useAssets(type?: string) {
   return useQuery({ queryKey: ["assets", type ?? "all"], queryFn: () => api.assets(type) });
 }
 
+/**
+ * Every semantic-layer item touching one physical column (GET
+ * /columns/{column_id}/related; §14), resolved lazily when a column is opened in
+ * the detail sheet. `columnId` null disables the query. Not retried on 404 so an
+ * unresolvable column surfaces immediately rather than after backoff.
+ */
+export function useColumnRelated(columnId: string | null) {
+  return useQuery({
+    queryKey: ["column-related", columnId],
+    enabled: columnId !== null,
+    queryFn: () => api.columnRelated(columnId!),
+    retry: false,
+  });
+}
+
 export function useSkills() {
   return useQuery({ queryKey: ["skills"], queryFn: api.skills });
 }

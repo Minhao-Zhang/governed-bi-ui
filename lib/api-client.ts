@@ -25,6 +25,7 @@ import {
   MOCK_SCHEMA,
   MOCK_SCHEMA_SUMMARY,
   MOCK_SKILLS,
+  mockColumnRelated,
 } from "@/lib/mock/fixtures";
 import {
   applyErGraphScope,
@@ -35,6 +36,7 @@ import {
   answerViewSchema,
   assetListSchema,
   capabilitiesSchema,
+  columnRelatedResponseSchema,
   corpusHealthSchema,
   editResponseSchema,
   erGraphSchema,
@@ -50,6 +52,7 @@ import type {
   AssetRow,
   Capabilities,
   ChatTurn,
+  ColumnRelated,
   CorpusHealth,
   EditResponse,
   ErGraph,
@@ -226,6 +229,17 @@ export const api = {
     ),
 
   skills: (): Promise<SkillView[]> => get("/skills", skillListSchema, MOCK_SKILLS),
+
+  /** Every semantic-layer item touching one physical column (GET
+   * /columns/{column_id}/related; handoff §14). `columnId` is the derived id from
+   * `deriveColumnId`. Joins are resolved server-side; metrics are table-grain. */
+  columnRelated: (columnId: string): Promise<ColumnRelated> => {
+    if (USE_MOCKS) return Promise.resolve(mockColumnRelated(columnId));
+    return getLive(
+      `/columns/${encodeURIComponent(columnId)}/related`,
+      columnRelatedResponseSchema,
+    );
+  },
 
   /** Non-streaming one-shot answer (POST /chat) — the fallback when the backend
    * reports `can_stream: false`. Streaming chat uses `useStream` instead. */

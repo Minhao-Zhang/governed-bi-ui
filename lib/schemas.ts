@@ -260,6 +260,77 @@ export const skillViewSchema = z.object({
   body: z.string(),
 });
 
+/* ── /columns/{column_id}/related (handoff §14) ──────────────────────────────
+ * Every semantic-layer item that touches one physical column. `column_id` is the
+ * derived id `col_<table without 'tbl_'>_<physical>` (see lib/columns.ts). Joins
+ * are resolved server-side from the physical ON predicate (§14.3); metrics are
+ * table-grain only (§14.4). Nullable/defaulted where the contract allows so a
+ * lean payload still parses. */
+
+const columnRefSchema = z.object({
+  column_id: z.string(),
+  table_id: z.string(),
+  physical_name: z.string(),
+});
+
+export const columnRelatedResponseSchema = z.object({
+  column: z.object({
+    id: z.string(),
+    table_id: z.string(),
+    table_physical_name: z.string(),
+    schema: z.string().nullable().optional(),
+    physical_name: z.string(),
+  }),
+  terms: z
+    .array(
+      z.object({
+        id: z.string(),
+        name: z.string(),
+        synonyms: z.array(z.string()).default([]),
+        confidence: z.number().nullable().optional(),
+        provenance_status: z.string().nullable().optional(),
+      }),
+    )
+    .default([]),
+  rules: z
+    .array(
+      z.object({
+        id: z.string(),
+        kind: z.string(),
+        statement: z.string(),
+        confidence: z.number().nullable().optional(),
+        provenance_status: z.string().nullable().optional(),
+      }),
+    )
+    .default([]),
+  fk_out: columnRefSchema.nullable().default(null),
+  fk_in: z.array(columnRefSchema).default([]),
+  joins: z
+    .array(
+      z.object({
+        id: z.string(),
+        left_table: z.string(),
+        right_table: z.string(),
+        other_table_id: z.string(),
+        on: z.string(),
+        cardinality: z.string().nullable().optional(),
+        confidence: z.number().nullable().optional(),
+        low_confidence: z.boolean().optional().default(false),
+      }),
+    )
+    .default([]),
+  metrics: z
+    .array(
+      z.object({
+        id: z.string(),
+        name: z.string(),
+        granularity: z.string().default("table"),
+      }),
+    )
+    .default([]),
+  meta: z.object({ column_resolvable: z.boolean() }).optional(),
+});
+
 /* ── Answer (chat terminal state) ────────────────────────────────────────── */
 
 export const resultTableSchema = z.object({

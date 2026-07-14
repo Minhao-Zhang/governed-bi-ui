@@ -12,11 +12,13 @@
  * field, a low-confidence join, and a refusal.
  */
 
+import { deriveColumnId } from "@/lib/columns";
 import type { GovEvent } from "@/lib/steps";
 import type {
   AnswerView,
   AssetRow,
   Capabilities,
+  ColumnRelated,
   CorpusHealth,
   ErGraph,
   KnowledgeGraph,
@@ -645,3 +647,129 @@ export const MOCK_REFUSAL: AnswerView = {
   },
   result: null,
 };
+
+/* ── /columns/{column_id}/related (§14) — derived from the mock schema/graph ──
+ * So the click-a-column feature is demoable offline. Resolves the column out of
+ * MOCK_SCHEMA and synthesizes plausible terms/rules/joins/metrics/FKs from the
+ * existing mock assets (all lists mirror the live contract shape). */
+
+const EMPTY_COLUMN_RELATED = (columnId: string): ColumnRelated => ({
+  column: {
+    id: columnId,
+    table_id: "",
+    table_physical_name: "",
+    schema: null,
+    physical_name: "",
+  },
+  terms: [],
+  rules: [],
+  fk_out: null,
+  fk_in: [],
+  joins: [],
+  metrics: [],
+  meta: { column_resolvable: false },
+});
+
+/** Metric ids by base table, mirroring MOCK_ASSETS metric summaries. */
+const MOCK_METRICS_BY_TABLE: Record<string, { id: string; name: string }[]> = {
+  table_b: [{ id: "metric_total", name: "metric_total" }],
+  table_c: [{ id: "metric_average", name: "metric_average" }],
+};
+
+export function mockColumnRelated(columnId: string): ColumnRelated {
+  // Locate the (table, column) whose derived id matches.
+  let hit: { table: TableView; physical: string } | null = null;
+  for (const table of MOCK_SCHEMA) {
+    for (const col of table.columns) {
+      if (deriveColumnId(table.id, col.physical_name) === columnId) {
+        hit = { table, physical: col.physical_name };
+        break;
+      }
+    }
+    if (hit) break;
+  }
+  if (!hit) return EMPTY_COLUMN_RELATED(columnId);
+
+  const { table, physical } = hit;
+  const col = table.columns.find((c) => c.physical_name === physical)!;
+  const qualified = `${table.physical_name}.${physical}`;
+
+  // fk_out: this column's own reference (mock uses "physical_table.column").
+  let fk_out: ColumnRelated["fk_out"] = null;
+  if (col.references) {
+    const [refPhysical, refCol] = col.references.split(".");
+    const refTable = MOCK_SCHEMA.find((t) => t.physical_name === refPhysical);
+    if (refTable && refCol) {
+      fk_out = {
+        column_id: deriveColumnId(refTable.id, refCol),
+        table_id: refTable.id,
+        physical_name: refCol,
+      };
+    }
+  }
+
+  // fk_in: columns elsewhere that reference this one.
+  const fk_in: ColumnRelated["fk_in"] = [];
+  for (const t of MOCK_SCHEMA) {
+    for (const c of t.columns) {
+      if (c.references === qualified) {
+        fk_in.push({
+          column_id: deriveColumnId(t.id, c.physical_name),
+          table_id: t.id,
+          physical_name: c.physical_name,
+        });
+      }
+    }
+  }
+
+  // joins: ER edges whose ON predicate touches this column (server-resolved live).
+  const joins: ColumnRelated["joins"] = MOCK_ER_GRAPH.edges
+    .filter((e) => e.on.includes(qualified))
+    .map((e) => ({
+      id: e.id,
+      left_table: e.source,
+      right_table: e.target,
+      other_table_id: e.source === table.id ? e.target : e.source,
+      on: e.on,
+      cardinality: e.cardinality,
+      confidence: e.confidence,
+      low_confidence: e.low_confidence,
+    }));
+
+  // terms bound to this column (mock: measures ground "total", label → "label").
+  const terms: ColumnRelated["terms"] = [];
+  if (col.role === "measure") {
+    terms.push({ id: "term_total", name: "total", synonyms: ["sum", "aggregate"], confidence: 0.9, provenance_status: "certified" });
+  } else if (physical === "label") {
+    terms.push({ id: "term_label", name: "label", synonyms: ["name", "title"], confidence: 0.85, provenance_status: "certified" });
+  }
+
+  // rules scoping this column (mock rule scopes table_b's boolean-ish flags).
+  const rules: ColumnRelated["rules"] =
+    table.id === "table_b"
+      ? [{ id: "rule_flags", kind: "interpretation", statement: "0/1 integer columns are booleans.", confidence: 0.8, provenance_status: "certified" }]
+      : [];
+
+  // metrics on this table (table-grain only, §14.4).
+  const metrics: ColumnRelated["metrics"] = (MOCK_METRICS_BY_TABLE[table.id] ?? []).map((m) => ({
+    ...m,
+    granularity: "table",
+  }));
+
+  return {
+    column: {
+      id: columnId,
+      table_id: table.id,
+      table_physical_name: table.physical_name,
+      schema: table.schema,
+      physical_name: physical,
+    },
+    terms,
+    rules,
+    fk_out,
+    fk_in,
+    joins,
+    metrics,
+    meta: { column_resolvable: true },
+  };
+}
