@@ -231,5 +231,6 @@ export function useStreamChat(): ChatTransport {
     activeStage: isRunning ? activeStage : null,
     steps: isRunning ? steps : [],
     servePath: isRunning ? servePath : null,
+    stop: () => stream.stop(),
   };
 }

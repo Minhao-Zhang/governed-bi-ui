@@ -3,7 +3,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 
 import { Providers } from "@/components/layout/providers";
-import { Nav } from "@/components/layout/nav";
+import { MobileNav, Nav } from "@/components/layout/nav";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -33,9 +33,10 @@ export default function RootLayout({
     >
       <body className="min-h-full">
         <Providers>
-          <div className="flex h-dvh">
+          <div className="flex h-dvh flex-col lg:flex-row">
             <Nav />
-            <main className="flex-1 overflow-y-auto">{children}</main>
+            <MobileNav />
+            <main className="min-w-0 flex-1 overflow-y-auto">{children}</main>
           </div>
         </Providers>
       </body>

@@ -11,6 +11,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { cn } from "@/lib/utils";
 import type { ResultTable } from "@/lib/types";
 
 function renderCell(value: unknown): string {
@@ -19,10 +20,26 @@ function renderCell(value: unknown): string {
   return String(value);
 }
 
+/** A column reads as numeric when every non-null cell in it is a number, so we
+ * can right-align it for scannability (nulls are ignored, not disqualifying). */
+function numericColumns(rows: unknown[][], columnCount: number): boolean[] {
+  return Array.from({ length: columnCount }, (_, col) => {
+    let sawValue = false;
+    for (const row of rows) {
+      const cell = row[col];
+      if (cell === null || cell === undefined) continue;
+      if (typeof cell !== "number") return false;
+      sawValue = true;
+    }
+    return sawValue;
+  });
+}
+
 /** Collapsible result grid from `Answer.result` (columns/rows), with a
  * truncation note when the executed set was larger than the preview. */
 export function ResultTable({ result }: { result: ResultTable }) {
   const [open, setOpen] = useState(true);
+  const numeric = numericColumns(result.rows, result.columns.length);
 
   return (
     <div className="rounded-md border">
@@ -44,8 +61,11 @@ export function ResultTable({ result }: { result: ResultTable }) {
           <Table>
             <TableHeader>
               <TableRow>
-                {result.columns.map((col) => (
-                  <TableHead key={col} className="font-mono text-xs">
+                {result.columns.map((col, j) => (
+                  <TableHead
+                    key={col}
+                    className={cn("font-mono text-xs", numeric[j] && "text-right")}
+                  >
                     {col}
                   </TableHead>
                 ))}
@@ -55,7 +75,13 @@ export function ResultTable({ result }: { result: ResultTable }) {
               {result.rows.map((row, i) => (
                 <TableRow key={i}>
                   {row.map((cell, j) => (
-                    <TableCell key={j} className="font-mono text-xs">
+                    <TableCell
+                      key={j}
+                      className={cn(
+                        "font-mono text-xs",
+                        numeric[j] && "text-right tabular-nums",
+                      )}
+                    >
                       {renderCell(cell)}
                     </TableCell>
                   ))}

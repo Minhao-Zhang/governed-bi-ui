@@ -1,28 +1,31 @@
 "use client";
 
 import { useState, type KeyboardEvent } from "react";
-import { SendHorizontal } from "lucide-react";
+import { SendHorizontal, Square } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 /**
- * The question input. Enter submits; Shift+Enter inserts a newline. Disabled
- * while a turn is running. Uses a native, auto-growing textarea styled to match
- * the shadcn Input (there's no Textarea primitive in the foundation set).
+ * The question input. Enter submits; Shift+Enter inserts a newline. While a turn
+ * is running the Send button becomes a Stop button (when the transport can abort)
+ * so a long agent loop or stream can be cancelled. Uses a native, auto-growing
+ * textarea styled to match the shadcn Input (no Textarea primitive in the set).
  */
 export function Composer({
   onSend,
-  disabled = false,
+  isRunning = false,
+  onStop,
 }: {
   onSend: (text: string) => void;
-  disabled?: boolean;
+  isRunning?: boolean;
+  onStop?: () => void;
 }) {
   const [value, setValue] = useState("");
 
   function submit() {
     const trimmed = value.trim();
-    if (!trimmed || disabled) return;
+    if (!trimmed || isRunning) return;
     onSend(trimmed);
     setValue("");
   }
@@ -33,6 +36,8 @@ export function Composer({
       submit();
     }
   }
+
+  const canStop = isRunning && onStop !== undefined;
 
   return (
     <form
@@ -46,7 +51,7 @@ export function Composer({
         value={value}
         onChange={(event) => setValue(event.target.value)}
         onKeyDown={onKeyDown}
-        disabled={disabled}
+        disabled={isRunning}
         rows={1}
         placeholder="Ask a question about the governed data…"
         aria-label="Ask a question about the governed data"
@@ -57,10 +62,17 @@ export function Composer({
           "disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-50",
         )}
       />
-      <Button type="submit" disabled={disabled || value.trim() === ""} className="shrink-0">
-        <SendHorizontal className="size-4" />
-        Send
-      </Button>
+      {canStop ? (
+        <Button type="button" variant="outline" onClick={onStop} className="shrink-0">
+          <Square className="size-4" />
+          Stop
+        </Button>
+      ) : (
+        <Button type="submit" disabled={isRunning || value.trim() === ""} className="shrink-0">
+          <SendHorizontal className="size-4" />
+          Send
+        </Button>
+      )}
     </form>
   );
 }

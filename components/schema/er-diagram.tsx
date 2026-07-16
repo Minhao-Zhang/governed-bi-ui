@@ -420,6 +420,10 @@ function ErCanvas({
         <Controls showInteractive={false} />
         <MiniMap pannable zoomable className="bg-muted!" />
 
+        <Panel position="bottom-left">
+          <ErLegend />
+        </Panel>
+
         {meta?.truncated && hiddenCount > 0 && (
           <Panel position="top-center">
             <button
@@ -463,6 +467,46 @@ function ErCanvas({
           </Panel>
         )}
       </ReactFlow>
+    </div>
+  );
+}
+
+/** Key to the diagram's glyphs and reliability channel. Kept compact in a
+ * corner so the audit signals (suspect columns, low-confidence FKs) are legible
+ * without hovering. */
+function ErLegend() {
+  return (
+    <div className="space-y-1 rounded-md border bg-card/95 px-2.5 py-2 text-[0.65rem] text-muted-foreground shadow-sm backdrop-blur">
+      <div className="flex items-center gap-1.5">
+        <KeyRound className="size-3 shrink-0 text-foreground" aria-hidden />
+        <span>primary key</span>
+      </div>
+      <div className="flex items-center gap-1.5">
+        <Link2 className="size-3 shrink-0 text-muted-foreground" aria-hidden />
+        <span>foreign key</span>
+      </div>
+      <div className="flex items-center gap-1.5">
+        <TriangleAlert className="size-3 shrink-0 text-tier-lineage" aria-hidden />
+        <span>suspect column</span>
+      </div>
+      <div className="flex items-center gap-1.5">
+        <svg width="18" height="6" viewBox="0 0 18 6" aria-hidden className="shrink-0">
+          <line
+            x1="0"
+            y1="3"
+            x2="18"
+            y2="3"
+            stroke={LOW_STROKE}
+            strokeWidth="1.5"
+            strokeDasharray="4 3"
+          />
+        </svg>
+        <span>low-confidence join</span>
+      </div>
+      <div className="flex items-center gap-1.5">
+        <span className="font-mono text-foreground">N:1</span>
+        <span>cardinality</span>
+      </div>
     </div>
   );
 }

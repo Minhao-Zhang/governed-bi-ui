@@ -58,6 +58,12 @@ export function HealthOverview() {
  */
 function CiBanner({ health }: { health: CorpusHealth }) {
   if (health.ci_green) {
+    // CI passing (structural checks) is distinct from having nothing for a
+    // reviewer to look at: suspect columns, excluded assets, and low-confidence
+    // joins don't fail CI but are still flagged below. Reconcile the two so the
+    // banner never claims "nothing flagged" while the triage cards light up.
+    const flagged =
+      health.n_suspect_columns + health.n_excluded + health.n_low_confidence_joins;
     return (
       <Card className="ring-tier-governed/30">
         <CardContent className="flex items-start gap-3">
@@ -65,7 +71,9 @@ function CiBanner({ health }: { health: CorpusHealth }) {
           <div className="space-y-0.5">
             <p className="font-medium text-tier-governed">CI green</p>
             <p className="text-sm text-muted-foreground">
-              All corpus checks pass. Nothing is flagged for review.
+              {flagged > 0
+                ? `Structural checks pass. ${flagged} item${flagged === 1 ? "" : "s"} flagged for reviewer attention below.`
+                : "All corpus checks pass. Nothing is flagged for review."}
             </p>
           </div>
         </CardContent>

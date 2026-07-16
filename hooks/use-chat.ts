@@ -62,6 +62,9 @@ export interface ChatTransport {
   steps?: TimelineStep[];
   /** Which serve path the current turn took; picks the progress renderer. */
   servePath?: "flow" | "agent" | null;
+  /** Cancel the in-flight turn. Optional: transports that can't abort (e.g. the
+   * plain POST /chat fallback) omit it and the composer hides the Stop button. */
+  stop?: () => void;
 }
 
 export interface UseChatResult extends ChatTransport {
@@ -193,6 +196,16 @@ export function useChat(): UseChatResult {
     [clearTimer, isRunning],
   );
 
+  // Abort the running turn, leaving the user's question in the transcript with no
+  // answer. The synthetic pipeline is a timer, so tearing it down is enough.
+  const stop = useCallback(() => {
+    clearTimer();
+    setIsRunning(false);
+    setActiveStage(null);
+    setSteps([]);
+    setServePath(null);
+  }, [clearTimer]);
+
   const reset = useCallback(() => {
     clearTimer();
     setMessages([]);
@@ -210,6 +223,7 @@ export function useChat(): UseChatResult {
     // Mirror `activeStage`: progress state only means anything mid-run.
     steps: isRunning ? steps : [],
     servePath: isRunning ? servePath : null,
+    stop,
     reset,
   };
 }

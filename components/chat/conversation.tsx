@@ -4,6 +4,7 @@ import { MessageSquareText } from "lucide-react";
 
 import { Composer } from "@/components/chat/composer";
 import { MessageList } from "@/components/chat/message-list";
+import { useAssets } from "@/hooks/queries";
 import type { ChatTransport } from "@/hooks/use-chat";
 
 /**
@@ -21,6 +22,7 @@ export function Conversation({
   activeStage,
   steps,
   servePath,
+  stop,
   banner,
 }: ChatTransport & { banner?: React.ReactNode }) {
   const isEmpty = messages.length === 0 && !isRunning;
@@ -30,8 +32,8 @@ export function Conversation({
       {/* Scrollable transcript. */}
       <div className="flex-1 overflow-y-auto">
         {isEmpty ? (
-          <div className="flex h-full items-center justify-center">
-            <EmptyState />
+          <div className="flex h-full items-center justify-center p-6">
+            <EmptyState onPick={send} />
           </div>
         ) : (
           <div className="mx-auto w-full max-w-3xl">
@@ -50,18 +52,46 @@ export function Conversation({
       <div className="border-t pt-4">
         <div className="mx-auto w-full max-w-3xl">
           {banner}
-          <Composer onSend={send} disabled={isRunning} />
+          <Composer onSend={send} isRunning={isRunning} onStop={stop} />
         </div>
       </div>
     </div>
   );
 }
 
-function EmptyState() {
+/**
+ * The cold-start view. Beyond the prompt, it surfaces the corpus's own few-shot
+ * questions as clickable starters so a first-time user learns what this governed
+ * dataset can actually answer instead of facing a blank box.
+ */
+function EmptyState({ onPick }: { onPick: (text: string) => void }) {
+  const { data: assets } = useAssets();
+  const starters = (assets ?? [])
+    .filter((a) => a.asset_type === "few_shot" && a.summary.trim() !== "")
+    .map((a) => a.summary)
+    .slice(0, 4);
+
   return (
-    <div className="flex flex-col items-center gap-2 text-center">
+    <div className="flex max-w-md flex-col items-center gap-4 text-center">
       <MessageSquareText className="size-6 text-muted-foreground" aria-hidden />
       <p className="text-sm text-muted-foreground">Ask a question about the governed data</p>
+      {starters.length > 0 && (
+        <div className="flex flex-col items-center gap-2">
+          <p className="text-xs text-muted-foreground/80">Try one of these</p>
+          <div className="flex flex-wrap justify-center gap-2">
+            {starters.map((q) => (
+              <button
+                key={q}
+                type="button"
+                onClick={() => onPick(q)}
+                className="rounded-full border px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:border-ring hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                {q}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

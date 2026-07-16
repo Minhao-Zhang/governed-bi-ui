@@ -9,7 +9,7 @@ import { useChat } from "@/hooks/use-chat";
  * answers are still synthetic.
  */
 export function MockChat() {
-  const { messages, send, isRunning, activeStage, steps, servePath } = useChat();
+  const { messages, send, isRunning, activeStage, steps, servePath, stop } = useChat();
 
   return (
     <Conversation
@@ -19,6 +19,7 @@ export function MockChat() {
       activeStage={activeStage}
       steps={steps}
       servePath={servePath}
+      stop={stop}
       banner={
         <p className="mb-2 text-xs text-muted-foreground">
           Preview mode — showing synthetic output; attach a backend for live answers.

@@ -8,7 +8,7 @@
  */
 
 import { useState } from "react";
-import { Pencil } from "lucide-react";
+import { Pencil, Search } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import { ASSET_TYPES, type AssetRow, type AssetType } from "@/lib/types";
@@ -18,6 +18,7 @@ import { QueryState } from "@/components/common/query-state";
 import { AssetEditSheet } from "@/components/corpus/asset-edit-sheet";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   Table,
   TableBody,
@@ -52,12 +53,26 @@ export function AssetBrowser() {
   const assets = useAssets();
   const { data: caps } = useCapabilities();
   const [filter, setFilter] = useState<Filter>("all");
+  const [query, setQuery] = useState("");
   const [editRow, setEditRow] = useState<AssetRow | null>(null);
 
   const editable = canEdit(caps);
+  const q = query.trim().toLowerCase();
 
   return (
     <div className="space-y-4">
+      {/* Free-text search over id + summary. */}
+      <div className="relative max-w-sm">
+        <Search className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
+        <Input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search assets…"
+          aria-label="Search corpus assets"
+          className="pl-8"
+        />
+      </div>
+
       {/* Filter row: "All" plus one toggle per asset type. */}
       <div className="flex flex-wrap items-center gap-1.5">
         <FilterToggle active={filter === "all"} onClick={() => setFilter("all")}>
@@ -80,16 +95,22 @@ export function AssetBrowser() {
         emptyMessage="No corpus assets."
       >
         {(data) => {
-          const rows =
-            filter === "all"
-              ? data
-              : data.filter((asset) => asset.asset_type === filter);
+          const rows = data.filter((asset) => {
+            if (filter !== "all" && asset.asset_type !== filter) return false;
+            if (!q) return true;
+            return (
+              asset.id.toLowerCase().includes(q) ||
+              asset.summary.toLowerCase().includes(q)
+            );
+          });
 
-          // The corpus has assets, but none match the active filter.
+          // The corpus has assets, but none match the active filter/search.
           if (rows.length === 0) {
             return (
               <p className="rounded-lg border border-dashed py-10 text-center text-sm text-muted-foreground">
-                No {typeLabel(filter)} assets.
+                {q
+                  ? `No assets match “${query.trim()}”.`
+                  : `No ${typeLabel(filter)} assets.`}
               </p>
             );
           }

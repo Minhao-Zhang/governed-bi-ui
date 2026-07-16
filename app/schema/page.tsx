@@ -181,16 +181,29 @@ function RailButton({
       {rollup && (
         <span className="flex shrink-0 items-center gap-1">
           {rollup.n_suspect > 0 && (
-            <Badge variant="outline" className="border-tier-lineage/50 text-tier-lineage">
+            <Badge
+              variant="outline"
+              className="border-tier-lineage/50 text-tier-lineage"
+              title={`${rollup.n_suspect} suspect column${rollup.n_suspect === 1 ? "" : "s"}`}
+            >
               {rollup.n_suspect}
             </Badge>
           )}
           {rollup.n_excluded > 0 && (
-            <Badge variant="outline" className="border-tier-refused/40 text-tier-refused">
+            <Badge
+              variant="outline"
+              className="border-tier-refused/40 text-tier-refused"
+              title={`${rollup.n_excluded} excluded table${rollup.n_excluded === 1 ? "" : "s"}`}
+            >
               {rollup.n_excluded}
             </Badge>
           )}
-          <span className="text-xs text-muted-foreground">{rollup.n_tables}</span>
+          <span
+            className="text-xs text-muted-foreground"
+            title={`${rollup.n_tables} table${rollup.n_tables === 1 ? "" : "s"}`}
+          >
+            {rollup.n_tables}
+          </span>
         </span>
       )}
     </button>
